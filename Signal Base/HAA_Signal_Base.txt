@@ -1,0 +1,76 @@
+﻿////////////////////////////////////////////////
+// SIGNAL: HAA_Signal_Base
+// Seoal base aplicada a cada sombolo del portfolio
+// Calcula momentum y lo envoa al PMM Signal
+// Identifica el universo al que pertenece el sombolo
+////////////////////////////////////////////////
+
+Inputs:
+    AssetUniverse(0),           // 0=Protective, 1=Stock, 2=Bond
+    BasedOnData(1);             // Data stream para colculo (usar mensual)
+
+Vars:
+    momentum(0),
+    currentPrice(0),
+    price1m(0),
+    price3m(0),
+    price6m(0),
+    price12m(0),
+    barN(0),
+    prevBarN(0);
+
+// Restricciones
+once if BarStatus(BasedOnData) < 0 then
+    raiseruntimeerror("HAA Signal Base needs datastream " + NumToStr(BasedOnData, 0));
+
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("HAA Signal Base can be applied for MCPortfolio application only.");
+
+// Detectar nueva barra mensual
+barN = BarNumber of data(BasedOnData);
+
+If barN > prevBarN then begin
+    // Obtener precios historicos
+    currentPrice = Close of data(BasedOnData);
+    
+    // Precios historicos (ajustar segon periodicidad mensual)
+    If CurrentBar >= 1 then
+        price1m = Close[1] of data(BasedOnData)
+    else
+        price1m = 0;
+    
+    If CurrentBar >= 3 then
+        price3m = Close[3] of data(BasedOnData)
+    else
+        price3m = 0;
+    
+    If CurrentBar >= 6 then
+        price6m = Close[6] of data(BasedOnData)
+    else
+        price6m = 0;
+    
+    If CurrentBar >= 12 then
+        price12m = Close[12] of data(BasedOnData)
+    else
+        price12m = 0;
+    
+    // Calcular momentum usando motodo 13612W
+    momentum = HAA_CalculateMomentum(
+        currentPrice,
+        price1m,
+        price3m,
+        price6m,
+        price12m
+    );
+    
+    // Enviar al PMM Signal
+    pmm_set_my_named_num("Momentum", momentum);
+    pmm_set_my_named_num("AssetUniverse", AssetUniverse);
+    
+    prevBarN = barN;
+end;
+
+// Generar ordenes dummy (seron manejadas por PMM)
+buy this bar at close;
+sellshort this bar at close;
+

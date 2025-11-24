@@ -1,0 +1,104 @@
+﻿////////////////////////////////////////////////
+// SIGNAL: FAA_Signal_Base
+// Seoal base aplicada a cada sombolo del portfolio FAA
+// Calcula momentum y volatilidad, los envoa al PMM Signal
+// Almacena RETORNOS LOGARoTMICOS historicos para colculo de correlacion
+////////////////////////////////////////////////
+
+Inputs:
+    MomentumLookback(4),        // Meses para momentum (default: 4)
+    VolatilityLookback(4),      // Meses para volatilidad (default: 4)
+    AssetUniverse(1),           // 0=Bond/Cash, 1=Stock
+    BasedOnData(1);             // Data stream para colculo (usar mensual)
+
+Vars:
+    momentum(0),
+    volatility(0),
+    currentPrice(0),
+    priceNMonthsAgo(0),
+    previousPrice(0),
+    logReturn(0),
+    barN(0),
+    prevBarN(0),
+    idx(0),
+    
+    // Para almacenar historico de retornos logarotmicos (correlacion)
+    LogReturnsList(0),
+    SymbolName(""),
+    maxHistoryBars(12);  // Guardar oltimos 12 meses para correlacion
+
+// Restricciones
+once if BarStatus(BasedOnData) < 0 then
+    raiseruntimeerror("FAA Signal Base needs datastream " + NumToStr(BasedOnData, 0));
+
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("FAA Signal Base can be applied for MCPortfolio application only.");
+
+// Inicializar lista compartida de RETORNOS LOGARoTMICOS (para correlacion)
+once begin
+    SymbolName = GetSymbolName;
+    LogReturnsList = ListN.Share("FAA_LogReturns_" + SymbolName);
+end;
+
+// Detectar nueva barra mensual
+barN = BarNumber of data(BasedOnData);
+
+If barN > prevBarN then begin
+    
+    currentPrice = Close of data(BasedOnData);
+    
+    // ================================================
+    // CALCULAR Y ALMACENAR RETORNO LOGARoTMICO (PARA CORRELACIoN)
+    // ================================================
+    
+    // Obtener precio anterior (hace 1 mes)
+    If CurrentBar >= 1 then begin
+        previousPrice = Close[1] of data(BasedOnData);
+        
+        If previousPrice > 0 then begin
+            // Calcular retorno logarotmico: ln(P_t / P_t-1)
+            logReturn = Log(currentPrice / previousPrice);
+            
+            // Agregar retorno logarotmico a la lista
+            Value1 = ListN.PushBack(LogReturnsList, logReturn);
+            
+            // Mantener solo oltimos N meses
+            while ListN.Count(LogReturnsList) > maxHistoryBars begin
+                Value1 = ListN.PopFront(LogReturnsList);
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // CALCULAR MOMENTUM
+    // ================================================
+    
+    // Obtener precio de hace N meses
+    If CurrentBar >= MomentumLookback then
+        priceNMonthsAgo = Close[MomentumLookback] of data(BasedOnData)
+    else
+        priceNMonthsAgo = 0;
+    
+    momentum = FAA_CalculateMomentum(currentPrice, priceNMonthsAgo);
+    
+    // ================================================
+    // CALCULAR VOLATILIDAD
+    // ================================================
+    
+    volatility = FAA_CalculateVolatility(Close of data(BasedOnData), VolatilityLookback);
+    
+    // ================================================
+    // ENVIAR AL PMM SIGNAL
+    // ================================================
+    
+    pmm_set_my_named_num("Momentum", momentum);
+    pmm_set_my_named_num("Volatility", volatility);
+    pmm_set_my_named_num("AssetUniverse", AssetUniverse);
+    
+    prevBarN = barN;
+end;
+
+// Generar ordenes dummy (seron manejadas por PMM)
+buy next bar at market; 
+sellshort next bar at market; 
+

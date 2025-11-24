@@ -1,0 +1,191 @@
+﻿////////////////////////////////////////////////
+// SIGNAL: EAA_Signal_Base
+// Senal base aplicada a cada simbolo del portfolio EAA
+// Implementa estrategia Elastic Asset Allocation (EAA)
+// Calcula retornos multiples (1m, 3m, 6m, 12m) y promedio ponderado
+// Almacena RETORNOS LOGARiTMICOS historicos para calculo de correlacion
+////////////////////////////////////////////////
+
+Inputs:
+    w1m(1),                     // Include 1 month returno (0=No, 1=Yes)
+    w3m(1),                     // Include 3 month returno (0=No, 1=Yes)
+    w6m(1),                     // Include 6 month returno (0=No, 1=Yes)
+    w12m(1),                    // Include 12 month returno (0=No, 1=Yes)
+    AssetUniverse(1),           // 0=Bond/Cash, 1=Stock
+    BasedOnData(1);             // Data stream para calculo (usar mensual)
+
+Vars:
+    currentPrice(0),
+    price1MonthAgo(0),
+    price3MonthsAgo(0),
+    price6MonthsAgo(0),
+    price12MonthsAgo(0),
+    previousPrice(0),
+    
+    ret1m(0),
+    ret3m(0),
+    ret6m(0),
+    ret12m(0),
+    avgRet(0),
+    
+    sumWeightedReturns(0),
+    sumWeights(0),
+    
+    volatility(0),
+    logReturn(0),
+    
+    barN(0),
+    prevBarN(0),
+    
+    // Para almacenar historico de retornos logaritmicos (correlacion)
+    LogReturnsList(0),
+    SymbolName(""),
+    maxHistoryBars(12);         // Guardar ultimos 12 meses para correlacion
+
+// Restricciones
+once if BarStatus(BasedOnData) < 0 then
+    raiseruntimeerror("EAA Signal Base needs datastream " + NumToStr(BasedOnData, 0));
+
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("EAA Signal Base can be applied for MCPortfolio application only.");
+
+// Inicializar lista compartida de RETORNOS LOGARiTMICOS (para correlacion)
+once begin
+    SymbolName = GetSymbolName;
+    LogReturnsList = ListN.Share("EAA_LogReturns_" + SymbolName);
+end;
+
+// Detectar nueva barra mensual
+barN = BarNumber of data(BasedOnData);
+
+If barN > prevBarN then begin
+    
+    currentPrice = Close of data(BasedOnData);
+    
+    // ================================================
+    // CALCULAR Y ALMACENAR RETORNO LOGARiTMICO (PARA CORRELACIoN)
+    // ================================================
+    
+    // Obtener precio anterior (hace 1 mes)
+    If CurrentBar >= 1 then begin
+        previousPrice = Close[1] of data(BasedOnData);
+        
+        If previousPrice > 0 then begin
+            // Calcular retorno logaritmico: ln(P_t / P_t-1)
+            logReturn = Log(currentPrice / previousPrice);
+            
+            // Agregar retorno logaritmico a la lista
+            Value1 = ListN.PushBack(LogReturnsList, logReturn);
+            
+            // Mantener solo ultimos N meses
+            while ListN.Count(LogReturnsList) > maxHistoryBars begin
+                Value1 = ListN.PopFront(LogReturnsList);
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // CALCULAR RETORNOS MuLTIPLES (1m, 3m, 6m, 12m)
+    // ================================================
+    
+    // Retorno 1 mes: -1 + P_t / P_t-1
+    If CurrentBar >= 1 then begin
+        price1MonthAgo = Close[1] of data(BasedOnData);
+        If price1MonthAgo > 0 then
+            ret1m = -1 + (currentPrice / price1MonthAgo)
+        else
+            ret1m = 0;
+    end
+    else
+        ret1m = 0;
+    
+    // Retorno 3 meses: -1 + P_t / P_t-3
+    If CurrentBar >= 3 then begin
+        price3MonthsAgo = Close[3] of data(BasedOnData);
+        If price3MonthsAgo > 0 then
+            ret3m = -1 + (currentPrice / price3MonthsAgo)
+        else
+            ret3m = 0;
+    end
+    else
+        ret3m = 0;
+    
+    // Retorno 6 meses: -1 + P_t / P_t-6
+    If CurrentBar >= 6 then begin
+        price6MonthsAgo = Close[6] of data(BasedOnData);
+        If price6MonthsAgo > 0 then
+            ret6m = -1 + (currentPrice / price6MonthsAgo)
+        else
+            ret6m = 0;
+    end
+    else
+        ret6m = 0;
+    
+    // Retorno 12 meses: -1 + P_t / P_t-12
+    If CurrentBar >= 12 then begin
+        price12MonthsAgo = Close[12] of data(BasedOnData);
+        If price12MonthsAgo > 0 then
+            ret12m = -1 + (currentPrice / price12MonthsAgo)
+        else
+            ret12m = 0;
+    end
+    else
+        ret12m = 0;
+    
+    // ================================================
+    // CALCULAR RETORNO PROMEDIO PONDERADO POR TIEMPO
+    // ================================================
+    // avgRet = (w1m*ret1m*1 + w3m*ret3m*3 + w6m*ret6m*6 + w12m*ret12m*12) / 
+    //          (w1m*1 + w3m*3 + w6m*6 + w12m*12)
+    
+    sumWeightedReturns = 0;
+    sumWeights = 0;
+    
+    If w1m > 0 then begin
+        sumWeightedReturns = sumWeightedReturns + (w1m * ret1m * 1);
+        sumWeights = sumWeights + (w1m * 1);
+    end;
+    
+    If w3m > 0 then begin
+        sumWeightedReturns = sumWeightedReturns + (w3m * ret3m * 3);
+        sumWeights = sumWeights + (w3m * 3);
+    end;
+    
+    If w6m > 0 then begin
+        sumWeightedReturns = sumWeightedReturns + (w6m * ret6m * 6);
+        sumWeights = sumWeights + (w6m * 6);
+    end;
+    
+    If w12m > 0 then begin
+        sumWeightedReturns = sumWeightedReturns + (w12m * ret12m * 12);
+        sumWeights = sumWeights + (w12m * 12);
+    end;
+    
+    // Calcular promedio ponderado
+    If sumWeights > 0 then
+        avgRet = sumWeightedReturns / sumWeights
+    else
+        avgRet = 0;
+    
+    // ================================================
+    // CALCULAR VOLATILIDAD ANUALIZADA
+    // ================================================
+    // Usar funcion existente FAA_CalculateVolatility
+    // que calcula StDev de retornos mensuales y anualiza
+    
+    volatility = FAA_CalculateVolatility(Close of data(BasedOnData), 4);
+    
+    // ================================================
+    // ENVIAR AL PMM SIGNAL
+    // ================================================
+    
+    pmm_set_my_named_num("Return", avgRet);
+    pmm_set_my_named_num("Volatility", volatility);
+    pmm_set_my_named_num("AssetUniverse", AssetUniverse);
+    
+    prevBarN = barN;
+end;
+
+// Generar ordenes dummy (seran manejadas por PMM)
+buy this bar at close;
+sellshort this bar at close;

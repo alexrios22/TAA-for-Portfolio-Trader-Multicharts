@@ -1,0 +1,109 @@
+﻿////////////////////////////////////////////////
+// SIGNAL: AAA_Signal_Base_v3
+// CORRECCIoN FINAL: Match exacto con AmiBroker
+// - Usa retornos SIMPLES (no logaritmicos)
+// - Momentum SIN anualizar (para ranking correcto)
+// Calcula metricas para Minimum Variance Portfolio con CCD
+////////////////////////////////////////////////
+
+Inputs:
+    MomLength(126),             // Periodo de momentum (dias)
+    VolLength(20),              // Periodo de volatilidad (dias)
+    CorLength(126);             // Periodo de correlacion (dias)
+
+Vars:
+    symbolName(""),
+    
+    // Retornos
+    dailyReturn(0),
+    momentum(0),
+    
+    // Volatilidad
+    volatility(0),
+    
+    // Maps compartidos
+    ReturnMap(0),
+    VolatilityMap(0),
+    
+    // Lista para retornos simples (para correlacion)
+    ReturnsList(0),
+    maxHistoryBars(0);
+
+// ================================================
+// INICIALIZACIoN
+// ================================================
+
+symbolName = GetSymbolName;
+
+// Calcular maximo de barras a guardar
+maxHistoryBars = CorLength + 10;
+
+// Crear o compartir Maps
+once begin
+    ReturnMap = MapSN.Share("AAA_Returns");
+    VolatilityMap = MapSN.Share("AAA_Volatilities");
+    
+    // Lista compartida para retornos SIMPLES (como AmiBroker)
+    ReturnsList = ListN.Share("AAA_Returns_" + symbolName);
+end;
+
+// ================================================
+// CaLCULOS
+// ================================================
+
+// Retorno diario SIMPLE (como AmiBroker: Close/Close[1] - 1)
+If Close[1] > 0 then
+    dailyReturn = (Close / Close[1] - 1) * 100
+else
+    dailyReturn = 0;
+
+// ================================================
+// MOMENTUM SIN ANUALIZAR (como AmiBroker)
+// ================================================
+// AmiBroker: Ret = 100 * (Close / Ref(Close, -MomLength) - 1)
+// NO anualiza para ranking, solo para display
+
+If Close[MomLength] > 0 then
+    momentum = (Close / Close[MomLength] - 1) * 100
+else
+    momentum = 0;
+
+// ================================================
+// VOLATILIDAD ANUALIZADA (como AmiBroker)
+// ================================================
+// AmiBroker: Vol = StDev(r1p, VolLength, False) * sqrt(yearlybars)
+
+volatility = StDev(dailyReturn, VolLength) * SquareRoot(252);
+
+// ================================================
+// ALMACENAR RETORNO SIMPLE EN LISTA (PARA CORRELACIoN)
+// ================================================
+// AmiBroker usa retornos SIMPLES para correlacion
+
+Value1 = ListN.PushBack(ReturnsList, dailyReturn);
+
+// Mantener solo ultimos N dias
+while ListN.Count(ReturnsList) > maxHistoryBars begin
+    Value1 = ListN.PopFront(ReturnsList);
+end;
+
+// ================================================
+// GUARDAR EN MAPS COMPARTIDOS
+// ================================================
+
+Value1 = MapSN.Put(ReturnMap, symbolName, momentum);
+Value1 = MapSN.Put(VolatilityMap, symbolName, volatility);
+
+// ================================================
+// OUTPUTS PARA PMM
+// ================================================
+
+// El PMM leera estos valores de los Maps compartidos
+// No se requieren outputs directos aqui
+
+// ================================================
+// PLACEHOLDER PARA ENTRIES (NO USADAS)
+// ================================================
+
+buy next bar at market; 
+sellshort next bar at market; 

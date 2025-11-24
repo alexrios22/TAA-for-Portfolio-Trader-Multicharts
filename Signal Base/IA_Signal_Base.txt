@@ -1,0 +1,47 @@
+﻿////////////////////////////////////////////////
+// SIGNAL: IA_Signal_Base
+// Senal base para Inercia Alcista (IA)
+// Calcula el indicador IA para cada simbolo
+// Aplicar a cada simbolo del portfolio
+////////////////////////////////////////////////
+
+Inputs:
+    Len1(8),                    // Longitud para ROC1
+    Len2(10),                   // Longitud para ROC2
+    Len3(14),                   // Longitud para ATR y SMA
+    BasedOnData(1);             // Data stream para calculo
+
+Vars:
+    iaMomentum(0),
+    barN(0),
+    prevBarN(0);
+
+// Restricciones
+once if BarStatus(BasedOnData) < 0 then
+    raiseruntimeerror("IA Signal Base needs datastream " + NumToStr(BasedOnData, 0));
+
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("IA Signal Base can be applied for MCPortfolio application only.");
+
+// Detectar nueva barra
+barN = BarNumber of data(BasedOnData);
+
+If barN > prevBarN then begin
+    
+    // Calcular Inercia Alcista usando la funcion
+    iaMomentum = IA_CalculateMomentum(
+        Close of data(BasedOnData),
+        Len1,
+        Len2,
+        Len3
+    );
+    
+    // Enviar al PMM Signal
+    pmm_set_my_named_num("IAMomentum", iaMomentum);
+    
+    prevBarN = barN;
+end;
+
+// Generar ordenes dummy (seran manejadas por PMM)
+buy this bar at close;
+sellshort this bar at close;

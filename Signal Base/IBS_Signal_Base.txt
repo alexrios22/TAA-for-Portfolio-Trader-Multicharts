@@ -1,0 +1,43 @@
+﻿////////////////////////////////////////////////
+// SIGNAL: IBS_Signal_Base
+// Senal base para Internal Bar Strength (IBS)
+// Calcula IBS para cada simbolo en el portfolio
+// Aplicar a cada simbolo del portfolio
+////////////////////////////////////////////////
+
+Inputs:
+    BasedOnData(1);             // Data stream para calculo
+
+Vars:
+    ibsValue(0),
+    barN(0),
+    prevBarN(0);
+
+// Restricciones
+once if BarStatus(BasedOnData) < 0 then
+    raiseruntimeerror("IBS Signal Base needs datastream " + NumToStr(BasedOnData, 0));
+
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("IBS Signal Base can be applied for MCPortfolio application only.");
+
+// Detectar nueva barra
+barN = BarNumber of data(BasedOnData);
+
+If barN > prevBarN then begin
+    
+    // Calcular IBS usando la funcion
+    ibsValue = IBS_CalculateIBS(
+        High of data(BasedOnData),
+        Low of data(BasedOnData),
+        Close of data(BasedOnData)
+    );
+    
+    // Enviar al PMM Signal
+    pmm_set_my_named_num("IBS", ibsValue);
+    
+    prevBarN = barN;
+end;
+
+// Generar ordenes dummy (seran manejadas por PMM)
+buy this bar at close;
+sellshort this bar at close;

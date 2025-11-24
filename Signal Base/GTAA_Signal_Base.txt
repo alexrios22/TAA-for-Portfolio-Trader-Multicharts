@@ -1,0 +1,43 @@
+﻿////////////////////////////////////////////////
+// SIGNAL: GTAA_Signal_Base
+// Seoal base aplicada a cada sombolo del portfolio
+// Calcula SMA y envoa valores al PMM Signal
+////////////////////////////////////////////////
+
+Inputs:
+    LookbackPeriod(10),         // SMA lookback
+    BasedOnData(1);             // Data stream para colculo
+
+Vars:
+    closePrice(0),
+    smaValue(0),
+    barN(0),
+    prevBarN(0);
+
+// Restricciones
+once if BarStatus(BasedOnData) < 0 then
+    raiseruntimeerror("GTAA Signal Base needs datastream " + NumToStr(BasedOnData, 0));
+
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("GTAA Signal Base can be applied for MCPortfolio application only.");
+
+// Detectar nueva barra
+barN = BarNumber of data(BasedOnData);
+
+If barN > prevBarN then begin
+    // Obtener precio de cierre
+    closePrice = Close of data(BasedOnData);
+    
+    // Calcular SMA
+    smaValue = Average(Close of data(BasedOnData), LookbackPeriod);
+    
+    // Enviar valores al PMM Signal
+    pmm_set_my_named_num("Close", closePrice);
+    pmm_set_my_named_num("SMA", smaValue);
+    
+    prevBarN = barN;
+end;
+
+// Generar ordenes dummy (seron manejadas por PMM)
+buy this bar at close;
+

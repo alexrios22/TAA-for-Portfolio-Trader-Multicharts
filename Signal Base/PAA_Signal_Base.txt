@@ -1,0 +1,55 @@
+﻿////////////////////////////////////////////////
+// SIGNAL: PAA_Signal_Base
+// Seoal base aplicada a cada sombolo del portfolio
+// Calcula momentum y lo envoa al PMM Signal
+////////////////////////////////////////////////
+
+Inputs:
+    IsStockSymbol(True),        // True=Stock, False=Bond
+    BasedOnData(1);             // Data stream para colculo
+
+Vars:
+    momentum(0),
+    currentPrice(0),
+    avgPrice(0),
+    barN(0),
+    prevBarN(0);
+
+// Restricciones
+once if BarStatus(BasedOnData) < 0 then
+    raiseruntimeerror("PAA Signal Base needs datastream " + NumToStr(BasedOnData, 0));
+
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("PAA Signal Base can be applied for MCPortfolio application only.");
+
+// Detectar nueva barra mensual
+barN = BarNumber of data(BasedOnData);
+
+If barN > prevBarN then begin
+    // Obtener precio actual
+    currentPrice = Close of data(BasedOnData);
+    
+    // Calcular SMA de 13 peroodos (momentum lookback = 12 + 1)
+    avgPrice = Average(Close of data(BasedOnData), 13);
+    
+    // Calcular momentum (estilo PAA/EAA)
+    // ri = -1 + Close / SMA13
+    If avgPrice > 0 then
+        momentum = -1 + currentPrice / avgPrice
+    else
+        momentum = 0;
+    
+    // Enviar al PMM Signal
+    pmm_set_my_named_num("Momentum", momentum);
+    
+    If IsStockSymbol then
+        pmm_set_my_named_num("AssetType", 1)  // 1 = Stock
+    else
+        pmm_set_my_named_num("AssetType", 0); // 0 = Bond
+    
+    prevBarN = barN;
+end;
+
+// Generar ordenes dummy (seron manejadas por PMM)
+buy this bar at close;
+sellshort this bar at close;

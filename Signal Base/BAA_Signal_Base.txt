@@ -1,0 +1,66 @@
+﻿////////////////////////////////////////////////
+// SIGNAL: BAA_Signal_Base
+// Senal base aplicada a cada simbolo del portfolio BAA
+// Calcula momentum y volatilidad, los envia al PMM Signal
+////////////////////////////////////////////////
+
+Inputs:
+    MomentumLookback(4),        // Meses para momentum (default: 4)
+    VolatilityLookback(4),      // Meses para volatilidad (default: 4)
+    AssetUniverse(1),           // 0=Canary, 1=Offensive, 2=Defensive
+    BasedOnData(1);             // Data stream para calculo (usar mensual)
+
+Vars:
+    momentum(0),
+    volatility(0),
+    currentPrice(0),
+    priceNMonthsAgo(0),
+    barN(0),
+    prevBarN(0);
+
+// Restricciones
+once if BarStatus(BasedOnData) < 0 then
+    raiseruntimeerror("BAA Signal Base needs datastream " + NumToStr(BasedOnData, 0));
+
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("BAA Signal Base can be applied for MCPortfolio application only.");
+
+// Detectar nueva barra mensual
+barN = BarNumber of data(BasedOnData);
+
+If barN > prevBarN then begin
+    
+    currentPrice = Close of data(BasedOnData);
+    
+    // ================================================
+    // CALCULAR MOMENTUM
+    // ================================================
+    
+    // Obtener precio de hace N meses
+    If CurrentBar >= MomentumLookback then
+        priceNMonthsAgo = Close[MomentumLookback] of data(BasedOnData)
+    else
+        priceNMonthsAgo = 0;
+    
+    momentum = BAA_CalculateMomentum(currentPrice, priceNMonthsAgo);
+    
+    // ================================================
+    // CALCULAR VOLATILIDAD
+    // ================================================
+    
+    volatility = BAA_CalculateVolatility(Close of data(BasedOnData), VolatilityLookback);
+    
+    // ================================================
+    // ENVIAR AL PMM SIGNAL
+    // ================================================
+    
+    pmm_set_my_named_num("Momentum", momentum);
+    pmm_set_my_named_num("Volatility", volatility);
+    pmm_set_my_named_num("AssetUniverse", AssetUniverse);
+    
+    prevBarN = barN;
+end;
+
+// Generar ordenes dummy (seran manejadas por PMM)
+buy this bar at close;
+sellshort this bar at close;

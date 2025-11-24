@@ -1,0 +1,52 @@
+﻿////////////////////////////////////////////////
+// SIGNAL: GEM_Signal_Base
+// Seoal base aplicada a cada sombolo del portfolio
+// Calcula momentum de 12 meses y lo envoa al PMM Signal
+////////////////////////////////////////////////
+
+Inputs:
+    AssetType(0),       // 0=US Stocks (IVV), 1=Intl Stocks (VEU), 
+                        // 2=Bonds (BND), 3=Cash (BIL)
+    BasedOnData(1);     // Data stream para colculo (usar mensual)
+
+Vars:
+    momentum(0),
+    currentPrice(0),
+    price12m(0),
+    barN(0),
+    prevBarN(0);
+
+// Restricciones
+once if BarStatus(BasedOnData) < 0 then
+    raiseruntimeerror("GEM Signal Base needs datastream " + NumToStr(BasedOnData, 0));
+
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("GEM Signal Base can be applied for MCPortfolio application only.");
+
+// Detectar nueva barra mensual
+barN = BarNumber of data(BasedOnData);
+
+If barN > prevBarN then begin
+    // Obtener precio actual
+    currentPrice = Close of data(BasedOnData);
+    
+    // Obtener precio hace 12 meses
+    If CurrentBar >= 12 then
+        price12m = Close[12] of data(BasedOnData)
+    else
+        price12m = 0;
+    
+    // Calcular momentum
+    momentum = GEM_CalculateMomentum(currentPrice, price12m);
+    
+    // Enviar al PMM Signal
+    pmm_set_my_named_num("Momentum", momentum);
+    pmm_set_my_named_num("AssetType", AssetType);
+    
+    prevBarN = barN;
+end;
+
+// Generar ordenes dummy (seron manejadas por PMM)
+buy this bar at close;
+sellshort this bar at close;
+
