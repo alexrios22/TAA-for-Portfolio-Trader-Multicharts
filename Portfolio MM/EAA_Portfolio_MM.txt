@@ -1,0 +1,549 @@
+﻿////////////////////////////////////////////////
+// PMM SIGNAL: EAA_Portfolio_MM
+// Portfolio Money Management para EAA (Elastic Asset Allocation)
+// Implementa 7 "Golden Models" con formula generalizada de scoring
+// 3 estilos de Cash Proxy Allocation
+// Pesos proporcionales a zi (score calculado)
+////////////////////////////////////////////////
+
+Inputs:
+    GoldenModel(0),             // 0=Defensive, 1=Neutral, 2=Offensive, 3=EW_Hedged, 4=EW_MinCor, 5=EW_MaxDiv, 6=EW_Return
+    CPstyle(0),                 // 0=Universe, 1=TopOnly, 2=NoAllocation
+    excludeCPF(1),              // Exclude CPF from universeo (0=No, 1=Yes)
+    PosQty(3),                  // Number of positions (top N assets)
+    CorLength(4),               // Correlation Period
+    RebalanceFrequency(0),      // 0=Monthly, 1=Quarterly, 2=Annually
+    VerboseMode(False);
+
+Vars:
+    portfolioStrategies(0),
+    idx(0),
+    jdx(0),
+    
+    // Exponentes de la formula EAA segun Golden Model
+    wR(0),                      // Exponente de retorno
+    wC(0),                      // Exponente de correlacion
+    wV(0),                      // Exponente de volatilidad
+    wS(0),                      // Exponente de score final
+    eps(0.00001),               // Epsilon para evitar division por cero
+    
+    // Contadores por universo
+    totalStocks(0),
+    totalBonds(0),
+    negReturnStocks(0),
+    posReturnStocks(0),
+    
+    // Variables para calculo
+    returnValue(0),
+    volatility(0),
+    correlation(0),
+    assetUniverse(0),
+    strategyIdx(0),
+    
+    // Score EAA
+    ri(0),
+    vi(0),
+    ci(0),
+    zi(0),
+    sumZi(0),
+    
+    // Correlacion
+    PfC(0),
+    CorSum(0),
+    symbol1(""),
+    symbol2(""),
+    
+    // Pesos
+    wi(0),
+    sumWi(0),
+    wCPF(0),
+    wCPF_final(0),
+    
+    
+    // Rebalanceo
+    isRebalanceDay(False),
+    currentMonth(0);
+
+// Arrays para almacenar datos
+array: 
+    // Arrays para zi scores [zi_value, strategy_index]
+    EAA_ZiScore[2, 10000](0),
+    
+    // Array para tracking de universos
+    assetUniverses[10000](0),
+    
+    // Arrays para almacenar ri, vi, ci de cada asset
+    assetReturns[10000](0),
+    assetVolatilities[10000](0),
+    assetCorrelations[10000](0),
+    
+    // Array para almacenar zi de cada asset
+    assetZiScores[10000](0),
+    
+    // Array para almacenar wi (pesos) de cada asset
+    assetWeights[10000](0);
+
+// Restricciones
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("EAA Portfolio MM can be applied for MCPortfolio application only.");
+
+once if pmms_strategies_count() > 10000 then
+    raiseruntimeerror("EAA Portfolio MM: too many instruments, max = 10000");
+
+once begin
+    portfolioStrategies = pmms_strategies_count();
+end;
+
+// ================================================
+// CONFIGURAR EXPONENTES SEGuN GOLDEN MODEL
+// ================================================
+
+// Defensive: zi ~ sqrt((1-ci)*ri)
+If GoldenModel = 0 then begin
+    wR = 1.0;
+    wC = 1.0;
+    wV = 0.0;
+    wS = 0.5;
+end;
+
+// Neutral: zi ~ (1-ci)*ri
+If GoldenModel = 1 then begin
+    wR = 1.0;
+    wC = 1.0;
+    wV = 0.0;
+    wS = 1.0;
+end;
+
+// Offensive: zi ~ ((1-ci)*ri)^2
+If GoldenModel = 2 then begin
+    wR = 1.0;
+    wC = 0.5;
+    wV = 0.0;
+    wS = 2.0;
+end;
+
+// EW_Hedged: zi ~ ((1-ci)*ri)^0
+If GoldenModel = 3 then begin
+    wR = 1.0;
+    wC = 1.0;
+    wV = 0.0;
+    wS = 0.0;
+end;
+
+// EW_MinCor: zi ~ ((1-ci)^2*ri)^0
+If GoldenModel = 4 then begin
+    wR = 1.0;
+    wC = 2.0;
+    wV = 0.0;
+    wS = 0.0;
+end;
+
+// EW_MaxDiv: zi ~ ((1-ci)/vi)^0
+If GoldenModel = 5 then begin
+    wR = 0.0;
+    wC = 1.0;
+    wV = 1.0;
+    wS = 0.0;
+end;
+
+// EW_Return: zi ~ ri^0
+If GoldenModel = 6 then begin
+    wR = 1.0;
+    wC = 0.0;
+    wV = 0.0;
+    wS = 0.0;
+end;
+
+// ================================================
+// DETECTAR DiA DE REBALANCEO
+// ================================================
+
+currentMonth = Month(date);
+isRebalanceDay = False;
+
+If RebalanceFrequency = 0 then begin
+    // Mensual: Ultima barra del mes
+    If LastTradingDayOfMonth then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 1 then begin
+    // Trimestral
+    If LastTradingDayOfMonth AND (currentMonth = 3 OR currentMonth = 6 OR currentMonth = 9 OR currentMonth = 12) then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 2 then begin
+    // Anual
+    If LastTradingDayOfMonth AND currentMonth = 12 then
+        isRebalanceDay = True;
+end;
+
+pmms_strategies_deny_entries_all();
+
+// ================================================
+// PROCESAMIENTO EN DiA DE REBALANCEO
+// ================================================
+
+If isRebalanceDay then begin
+    
+    // ================================================
+    // PASO 1: RECOPILAR DATOS BaSICOS Y CALCULAR CORRELACIONES
+    // ================================================
+    
+    totalStocks = 0;
+    totalBonds = 0;
+    negReturnStocks = 0;
+    
+    // Primer pass: contar activos y guardar datos basicos
+    For idx = 0 to portfolioStrategies - 1 begin
+        returnValue = pmms_get_strategy_named_num(idx, "Return");
+        volatility = pmms_get_strategy_named_num(idx, "Volatility");
+        assetUniverse = pmms_get_strategy_named_num(idx, "AssetUniverse");
+        
+        assetUniverses[idx] = assetUniverse;
+        assetReturns[idx] = returnValue;
+        assetVolatilities[idx] = volatility;
+        
+        If assetUniverse = 1 then begin
+            // Stock
+            totalStocks = totalStocks + 1;
+            
+            If returnValue <= 0 then
+                negReturnStocks = negReturnStocks + 1;
+        end
+        else If assetUniverse = 0 then begin
+            // Bond/Cash
+            totalBonds = totalBonds + 1;
+        end;
+    end;
+    
+    // Segundo pass: calcular correlacion promedio para cada stock
+    For idx = 0 to portfolioStrategies - 1 begin
+        assetUniverse = assetUniverses[idx];
+        symbol1 = pmms_strategy_symbol(idx);
+        
+        // Solo calcular correlacion para stocks (no para bonds)
+        If assetUniverse = 1 then begin
+            // REINICIAR CorSum para ESTE activo
+            CorSum = 0;
+            
+            // Calcular correlacion con todos los demas stocks
+            For jdx = 0 to portfolioStrategies - 1 begin
+                If assetUniverses[jdx] = 1 then begin
+                    symbol2 = pmms_strategy_symbol(jdx);
+                    
+                    correlation = FAA_CalculateCorrelation(
+                        symbol1,
+                        symbol2,
+                        CorLength
+                    );
+                    
+                    CorSum = CorSum + correlation;
+                end;
+            end;
+            
+            // Calcular correlacion promedio del portfolio para ESTE activo
+            // Eliminar la diagonal (correlacion consigo mismo = 1) y promediar
+            If totalStocks > 1 then
+                PfC = (CorSum - 1) / (totalStocks - 1)
+            else
+                PfC = 0;
+            
+            assetCorrelations[idx] = PfC;
+        end
+        else begin
+            // Bonds: correlacion = 0
+            assetCorrelations[idx] = 0;
+        end;
+    end;
+    
+    posReturnStocks = totalStocks - negReturnStocks;
+    
+    // ================================================
+    // PASO 2: CALCULAR zi SCORE PARA CADA ASSET
+    // ================================================
+    // Formula EAA: zi = (MAX(ri,0)^wR * (1-ci)^wC / (vi+eps)^wV)^(wS+eps)
+    
+    sumZi = 0;
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        assetUniverse = assetUniverses[idx];
+        
+        // Solo calcular zi para stocks (no bonds)
+        If assetUniverse = 1 then begin
+            ri = assetReturns[idx];
+            vi = assetVolatilities[idx];
+            ci = assetCorrelations[idx];
+            
+            // zi = (MAX(ri,0)^wR * (1-ci)^wC / (vi+eps)^wV)^(wS+eps)
+            // zi = 0 si ri <= 0
+            
+            If ri <= 0 then begin
+                zi = 0;
+            end
+            else begin
+                // Calcular componentes
+                Vars: term1(0), term2(0), term3(0), innerTerm(0);
+                
+                // term1 = ri^wR (solo si wR > 0)
+                If wR > 0 then
+                    term1 = Power(ri, wR)
+                else
+                    term1 = 1;
+                
+                // term2 = (1-ci)^wC (solo si wC > 0)
+                If wC > 0 then
+                    term2 = Power(MaxList(1 - ci, 0), wC)
+                else
+                    term2 = 1;
+                
+                // term3 = (vi+eps)^wV (solo si wV > 0)
+                If wV > 0 then
+                    term3 = Power(vi + eps, wV)
+                else
+                    term3 = 1;
+                
+                // Combinar: innerTerm = term1 * term2 / term3
+                If term3 > 0 then
+                    innerTerm = (term1 * term2) / term3
+                else
+                    innerTerm = term1 * term2;
+                
+                // Aplicar exponente final: zi = innerTerm^(wS+eps)
+                zi = Power(MaxList(innerTerm, 0), wS + eps);
+            end;
+            
+            assetZiScores[idx] = zi;
+            
+            // Guardar en array para ranking
+            EAA_ZiScore[1, idx+1] = zi;
+            EAA_ZiScore[2, idx+1] = idx;
+        end
+        else begin
+            // Bonds: zi = 0 (no participan en ranking)
+            zi = 0;
+            assetZiScores[idx] = zi;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 3: RANKING POR zi (MAYOR ES MEJOR)
+    // ================================================
+    
+    // Ordenar por zi (descendente: mayor primero)
+    Sort2DArray(EAA_ZiScore, 2, totalStocks, -1);
+    
+    // ================================================
+    // PASO 4: CALCULAR wCPF SEGuN CASH PROXY STYLE
+    // ================================================
+    
+    wCPF = 0;
+    
+    // Style 0: Universe (default EAA)
+    // wCPF = 100 * sumNegRet / (NoS - excludeCPF)
+    If CPstyle = 0 then begin
+        If totalStocks > 0 then
+            wCPF = 100 * negReturnStocks / totalStocks
+        else
+            wCPF = 0;
+    end;
+    
+    // Style 1: TopOnly (FAA style)
+    // wCPF = max((100 * (PosQty - sumPosRet) / PosQty), 0)
+    If CPstyle = 1 then begin
+        If PosQty > 0 then
+            wCPF = MaxList(100 * (PosQty - posReturnStocks) / PosQty, 0)
+        else
+            wCPF = 0;
+    end;
+    
+    // Style 2: NoAllocation
+    // wCPF = 0
+    If CPstyle = 2 then begin
+        wCPF = 0;
+    end;
+    
+    // ================================================
+    // PASO 5: CALCULAR PESOS (wi) PROPORCIONALES A zi
+    // ================================================
+    
+    // Primero, sumar zi de los Top N assets
+    sumZi = 0;
+    For idx = 0 to PosQty - 1 begin
+        If idx < totalStocks then begin
+            strategyIdx = EAA_ZiScore[2, idx+1];
+            zi = assetZiScores[strategyIdx];
+            
+            If zi > 0 then
+                sumZi = sumZi + zi;
+        end;
+    end;
+    
+    // Segundo, calcular wi para cada Top N asset
+    sumWi = 0;
+    
+    For idx = 0 to PosQty - 1 begin
+        If idx < totalStocks then begin
+            strategyIdx = EAA_ZiScore[2, idx+1];
+            zi = assetZiScores[strategyIdx];
+            
+            // wi = (100 - wCPF) * zi / sumZi
+            If zi > 0 and sumZi > 0 then begin
+                wi = (100 - wCPF) * zi / sumZi;
+                assetWeights[strategyIdx] = wi;
+                sumWi = sumWi + wi;
+            end
+            else begin
+                assetWeights[strategyIdx] = 0;
+            end;
+        end;
+    end;
+    
+    // Tercero, calcular peso final para CPF
+    wCPF_final = 100 - sumWi;
+    
+    // Asegurar que wCPF_final este entre 0 y 100
+    wCPF_final = MaxList(0, MinList(100, wCPF_final));
+    
+    // ================================================
+    // PASO 6: IDENTIFICAR ASSETS EN TOP N
+    // ================================================
+    
+    // Array para marcar cuales assets deben estar en TopN
+    Array: shouldBeInTopN[10000](False);
+    
+    // IMPORTANTE: Reinicializar array a False
+    For idx = 0 to portfolioStrategies - 1 begin
+        shouldBeInTopN[idx] = False;
+    end;
+    
+    Vars: tempAssetsCount(0);
+    tempAssetsCount = 0;
+    
+    // Marcar Top N stocks (con zi > 0)
+    For idx = 0 to PosQty - 1 begin
+        If idx < totalStocks then begin
+            strategyIdx = EAA_ZiScore[2, idx+1];
+            zi = assetZiScores[strategyIdx];
+            
+            If zi > 0 then begin
+                shouldBeInTopN[strategyIdx] = True;
+                tempAssetsCount = tempAssetsCount + 1;
+            end;
+        end;
+    end;
+    
+    // Marcar bonds si wCPF_final > 0
+    If wCPF_final > 0 then begin
+        For idx = 0 to portfolioStrategies - 1 begin
+            If assetUniverses[idx] = 0 then begin
+                shouldBeInTopN[idx] = True;
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 7: CERRAR POSICIONES QUE NO ESTaN EN TOP N
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        If pmms_strategy_marketposition(idx) <> 0 then begin
+            If shouldBeInTopN[idx] = False then begin
+                pmms_strategy_close_position(idx);
+                
+                If VerboseMode then
+                    print("Closing: ", pmms_strategy_symbol(idx));
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 8: ASIGNAR CONTRATOS Y PERMITIR ENTRADAS
+    // ================================================
+    
+    Vars: assetsSelected(0), bondsSelected(0);
+    
+    assetsSelected = 0;
+    bondsSelected = 0;
+    
+    // Asignar Top N stocks
+    For idx = 0 to PosQty - 1 begin
+        If idx < totalStocks then begin
+            strategyIdx = EAA_ZiScore[2, idx+1];
+            wi = assetWeights[strategyIdx];
+            
+            If wi > 0 then begin
+                pmms_strategy_set_entry_contracts(strategyIdx, 
+                    IntPortion(Portfolio_Equity * wi / 100 / Close)
+                );
+                pmms_strategy_allow_long_entries(strategyIdx);
+                
+                assetsSelected = assetsSelected + 1;
+                
+                If VerboseMode then begin
+                    symbol1 = pmms_strategy_symbol(strategyIdx);
+                    ri = assetReturns[strategyIdx];
+                    print("ASSET #", assetsSelected:0:0, ": ", symbol1, 
+                          " | Rank: ", idx+1:0:0,
+                          " | Return: ", ri*100:0:2, "%",
+                          " | zi: ", assetZiScores[strategyIdx]:0:6,
+                          " | Weight: ", wi:0:2, "%");
+                end;
+            end;
+        end;
+    end;
+    
+    // Asignar Bonds/Cash Proxy Funds (AssetUniverse = 0)
+    // Si hay multiples bonds, distribuir wCPF_final entre ellos equitativamente
+    If totalBonds > 0 and wCPF_final > 0 then begin
+        Vars: weightPerBond(0);
+        
+        weightPerBond = wCPF_final / totalBonds;
+        
+        For idx = 0 to portfolioStrategies - 1 begin
+            If assetUniverses[idx] = 0 then begin
+                
+                pmms_strategy_set_entry_contracts(idx, 
+                    IntPortion(Portfolio_Equity * weightPerBond / 100 / Close)
+                );
+                pmms_strategy_allow_long_entries(idx);
+                
+                bondsSelected = bondsSelected + 1;
+                
+                If VerboseMode then begin
+                    symbol1 = pmms_strategy_symbol(idx);
+                    print("BOND/CASH: ", symbol1, 
+                          " | Weight: ", weightPerBond:0:2, "%");
+                end;
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 9: RESUMEN
+    // ================================================
+    
+    If VerboseMode then begin
+        Vars: modelName("");
+        
+        If GoldenModel = 0 then modelName = "Defensive";
+        If GoldenModel = 1 then modelName = "Neutral";
+        If GoldenModel = 2 then modelName = "Offensive";
+        If GoldenModel = 3 then modelName = "EW_Hedged";
+        If GoldenModel = 4 then modelName = "EW_MinCor";
+        If GoldenModel = 5 then modelName = "EW_MaxDiv";
+        If GoldenModel = 6 then modelName = "EW_Return";
+        
+        print("========================================");
+        print("EAA REBALANCE - ", Date:0:0);
+        print("----------------------------------------");
+        print("Golden Model: ", modelName);
+        print("Exponents: wR=", wR:0:2, " wC=", wC:0:2, " wV=", wV:0:2, " wS=", wS:0:2);
+        print("Total Stocks in Universe: ", totalStocks:0:0);
+        print("Stocks with Positive Return: ", posReturnStocks:0:0);
+        print("Assets Selected: ", assetsSelected:0:0, " of Max ", PosQty:0:0);
+        print("Total Asset Allocation: ", sumWi:0:2, "%");
+        print("Cash Proxy Allocation: ", wCPF_final:0:2, "%");
+        print("Total Portfolio Allocation: ", (sumWi + wCPF_final):0:2, "%");
+        print("========================================");
+    end;
+end;

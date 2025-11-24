@@ -1,0 +1,404 @@
+﻿////////////////////////////////////////////////
+// PMM SIGNAL: AAA_Portfolio_MM
+// Portfolio Money Management para AAA
+// Implementa Minimum Variance Portfolio con algoritmo CCD
+// Usa cierre selectivo de posiciones (mantener TopN)
+////////////////////////////////////////////////
+
+Inputs:
+    NumTopPositions(5),         // Top N activos a mantener
+    MomLength(126),             // Peroodo de momentum
+    VolLength(20),              // Peroodo de volatilidad
+    CorLength(126),             // Peroodo de correlacion
+    MaxCCDIterations(300),      // Moximo iteraciones CCD
+    MinPositionSize(2.0),       // Peso minimo para posicion (%) - Match con AmiBroker
+    RebalanceFrequency(0),      // 0=Monthly, 1=Quarterly, 2=Annually
+    VerboseMode(False);
+
+Vars:
+    portfolioStrategies(0),
+    idx(0),
+    jdx(0),
+    kdx(0),
+    
+    // Maps compartidos
+    ReturnMap(0),
+    VolatilityMap(0),
+    
+    // Contadores
+    totalAssets(0),
+    posReturnAssets(0),
+    
+    // Variables para colculo
+    momentum(0),
+    volatility(0),
+    strategyIdx(0),
+    symbolName(""),
+    symbolName2(""),
+    
+    // Arrays para datos
+    assetSymbols(0),            // ListS de sombolos
+    assetMomentums(0),          // ListN de momentums
+    assetIndices(0),            // ListN de ondices de estrategias
+    
+    // Matriz de covarianza
+    SIGMA(0),                   // ListC (matriz)
+    
+    // Retornos diarios para correlacion
+    returns1(0),                // ListN de retornos historicos
+    returns2(0),
+    correlation(0),
+    stdDev1(0),
+    stdDev2(0),
+    covariance(0),
+    
+    // Pesos optimos
+    optimalWeights(0),          // ListN de pesos del CCD
+    weight(0),
+    
+    // Rebalanceo
+    isRebalanceDay(False),
+    currentMonth(0),
+    
+    // Tracking
+    assetsAllocated(0),
+    totalWeight(0);
+
+// Arrays para ranking
+array: 
+    momentumRank[2, 10000](0);
+
+// Restricciones
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("AAA Portfolio MM can be applied for MCPortfolio application only.");
+
+once if pmms_strategies_count() > 10000 then
+    raiseruntimeerror("AAA Portfolio MM: too many instruments, max = 10000");
+
+once begin
+    portfolioStrategies = pmms_strategies_count();
+    
+    // Acceder a Maps compartidos
+    ReturnMap = MapSN.Share("AAA_Returns");
+    VolatilityMap = MapSN.Share("AAA_Volatilities");
+end;
+
+// ================================================
+// DETECTAR DoA DE REBALANCEO
+// ================================================
+
+currentMonth = Month(date);
+isRebalanceDay = False;
+
+If RebalanceFrequency = 0 then begin
+    // Mensual: oltima barra del mes
+    If LastTradingDayOfMonth then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 1 then begin
+    // Trimestral
+    If LastTradingDayOfMonth AND (currentMonth = 3 OR currentMonth = 6 OR currentMonth = 9 OR currentMonth = 12) then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 2 then begin
+    // Anual
+    If LastTradingDayOfMonth AND currentMonth = 12 then
+        isRebalanceDay = True;
+end;
+
+pmms_strategies_deny_entries_all();
+
+// ================================================
+// PROCESAMIENTO EN DoA DE REBALANCEO
+// ================================================
+
+If isRebalanceDay then begin
+    
+    // ================================================
+    // PASO 1: RECOPILAR DATOS
+    // ================================================
+    
+    totalAssets = 0;
+    posReturnAssets = 0;
+    
+    assetSymbols = ListS.New;
+    assetMomentums = ListN.New;
+    assetIndices = ListN.New;
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        symbolName = pmms_strategy_symbol(idx);
+        
+        // Leer momentum del Map
+        If MapSN.Exists(ReturnMap, symbolName) then begin
+            momentum = MapSN.Get(ReturnMap, symbolName);
+            
+            Value1 = ListS.PushBack(assetSymbols, symbolName);
+            Value1 = ListN.PushBack(assetMomentums, momentum);
+            Value1 = ListN.PushBack(assetIndices, idx);
+            
+            totalAssets = totalAssets + 1;
+            
+            If momentum > 0 then
+                posReturnAssets = posReturnAssets + 1;
+        end;
+    end;
+    
+    If VerboseMode then begin
+        print("========================================");
+        print("AAA REBALANCE: ", Date:0:0);
+        print("Total Assets: ", totalAssets:0:0);
+        print("Pos Momentum Assets: ", posReturnAssets:0:0);
+        print("========================================");
+    end;
+    
+    // ================================================
+    // PASO 2: RANKING POR MOMENTUM
+    // ================================================
+    
+    // Llenar array de ranking
+    For idx = 1 to totalAssets begin
+        momentum = ListN.Get(assetMomentums, idx);
+        strategyIdx = ListN.Get(assetIndices, idx);
+        
+        momentumRank[1, idx] = momentum;
+        momentumRank[2, idx] = strategyIdx;
+    end;
+    
+    // Ordenar por momentum (mayor a menor)
+    Sort2DArray(momentumRank, 2, totalAssets, 1);
+    
+    // ================================================
+    // PASO 3: SELECCIONAR TOP N (sin filtrar por momentum positivo)
+    // CORRECCIoN: AmiBroker incluye TODOS los Top N, incluso con momentum negativo
+    // ================================================
+    
+    Vars: topNCount(0), topNList(0);
+    topNList = ListN.New;
+    topNCount = 0;
+    
+    For idx = 1 to totalAssets begin
+        If topNCount >= NumTopPositions then
+            break;
+        
+        strategyIdx = momentumRank[2, idx];
+        
+        // Incluir TODOS los Top N (sin filtrar por momentum > 0)
+        Value1 = ListN.PushBack(topNList, strategyIdx);
+        topNCount = topNCount + 1;
+    end;
+    
+    If VerboseMode then
+        print("TopN Count: ", topNCount:0:0);
+    
+    // ================================================
+    // PASO 4: CONSTRUIR MATRIZ DE COVARIANZA (SIGMA)
+    // ================================================
+    
+    If topNCount > 0 then begin
+        
+        SIGMA = ListC.New;
+        
+        // Para cada asset i en TopN
+        For idx = 1 to topNCount begin
+            Vars: rowSIGMA(0);
+            rowSIGMA = ListN.New;
+            
+            strategyIdx = ListN.Get(topNList, idx);
+            symbolName = pmms_strategy_symbol(strategyIdx);
+            
+            If MapSN.Exists(VolatilityMap, symbolName) then
+                stdDev1 = MapSN.Get(VolatilityMap, symbolName)
+            else
+                stdDev1 = 10.0;  // Default
+            
+            // Para cada asset j en TopN
+            For jdx = 1 to topNCount begin
+                Vars: strategyIdx2(0);
+                strategyIdx2 = ListN.Get(topNList, jdx);
+                symbolName2 = pmms_strategy_symbol(strategyIdx2);
+                
+                If idx = jdx then begin
+                    // Diagonal: varianza
+                    covariance = stdDev1 * stdDev1;
+                end
+                else begin
+                    // Off-diagonal: covarianza
+                    If MapSN.Exists(VolatilityMap, symbolName2) then
+                        stdDev2 = MapSN.Get(VolatilityMap, symbolName2)
+                    else
+                        stdDev2 = 10.0;
+                    
+                    // Calcular correlacion usando AAA_CalculateLogReturnCorrelation
+                    correlation = AAA_CalculateCorrelation_v3(
+                        symbolName,
+                        symbolName2,
+                        CorLength
+                    );
+                    
+                    covariance = correlation * stdDev1 * stdDev2;
+                end;
+                
+                Value1 = ListN.PushBack(rowSIGMA, covariance);
+            end;
+            
+            Value1 = ListC.PushBack(SIGMA, rowSIGMA);
+        end;
+        
+        // ================================================
+        // PASO 5: OPTIMIZAR PESOS CON CCD
+        // ================================================
+        
+        If VerboseMode then
+            print("Ejecutando CCD...");
+        
+        optimalWeights = CCD_OptimizeWeights(SIGMA, MaxCCDIterations);
+        
+        If VerboseMode then begin
+            print("CCD returned ID: ", optimalWeights:0:0);
+            If optimalWeights <> 0 then
+                print("CCD weights count: ", ListN.Count(optimalWeights):0:0);
+        end;
+        
+        // Liberar matriz SIGMA
+        Value1 = ListC.Release(SIGMA);
+        
+        // ================================================
+        // PASO 6: FILTRAR PESOS PEQUEoOS
+        // ================================================
+        
+        Vars: filteredWeights(0), sumFiltered(0), normalizedWeights(0);
+        
+        // Verificar que CCD retorno resultado volido
+        If optimalWeights = 0 or ListN.Count(optimalWeights) = 0 then begin
+            If VerboseMode then
+                print("ERROR: CCD no retorno pesos volidos!");
+        end
+        else begin
+            
+            If VerboseMode then
+                print("Pesos CCD (antes de filtrar):");
+            
+            filteredWeights = ListN.New;
+            sumFiltered = 0;
+            
+            For idx = 1 to topNCount begin
+                weight = ListN.Get(optimalWeights, idx);
+                
+                If VerboseMode then
+                    print("  Asset ", idx:0:0, ": ", 100*weight:0:2, "%");
+                
+                If weight < MinPositionSize/100 then
+                    weight = 0;
+                
+                Value1 = ListN.PushBack(filteredWeights, weight);
+                sumFiltered = sumFiltered + weight;
+            end;
+            
+            // Renormalizar despuos de filtrar
+            If sumFiltered > 0 then begin
+                // Crear nueva lista normalizada
+                normalizedWeights = Matrix_ScalarMultiply(filteredWeights, 100.0 / sumFiltered);
+                // Liberar la lista filtrada temporal
+                Value1 = ListN.Release(filteredWeights);
+                // Usar la normalizada
+                filteredWeights = normalizedWeights;
+            end;
+            
+            // Liberar optimalWeights original
+            Value1 = ListN.Release(optimalWeights);
+            optimalWeights = filteredWeights;
+            
+            // ================================================
+            // PASO 7: IDENTIFICAR ASSETS EN TOP N
+            // ================================================
+            
+            Array: shouldBeInTopN[10000](False);
+            
+            For idx = 0 to portfolioStrategies - 1 begin
+                shouldBeInTopN[idx] = False;
+            end;
+            
+            For idx = 1 to topNCount begin
+                weight = ListN.Get(optimalWeights, idx);
+                
+                If weight > 0 then begin
+                    strategyIdx = ListN.Get(topNList, idx);
+                    shouldBeInTopN[strategyIdx] = True;
+                end;
+            end;
+            
+            // ================================================
+            // PASO 8: CERRAR POSICIONES QUE NO ESToN EN TOP N
+            // ================================================
+            
+            For idx = 0 to portfolioStrategies - 1 begin
+                If pmms_strategy_marketposition(idx) <> 0 then begin
+                    If shouldBeInTopN[idx] = False then begin
+                        pmms_strategy_close_position(idx);
+                        
+                        If VerboseMode then
+                            print("Closing: ", pmms_strategy_symbol(idx));
+                    end;
+                end;
+            end;
+            
+            // ================================================
+            // PASO 9: ASIGNAR PESOS Y ABRIR/MANTENER POSICIONES
+            // ================================================
+            
+            assetsAllocated = 0;
+            totalWeight = 0;
+            
+            If VerboseMode then
+                print("OPTIMAL WEIGHTS:");
+            
+            For idx = 1 to topNCount begin
+                weight = ListN.Get(optimalWeights, idx);
+                
+                If weight > 0 then begin
+                    strategyIdx = ListN.Get(topNList, idx);
+                    
+                    pmms_strategy_set_entry_contracts(strategyIdx, 
+                        IntPortion(Portfolio_Equity * weight / 100 / Close)
+                    );
+                    pmms_strategy_allow_long_entries(strategyIdx);
+                    
+                    assetsAllocated = assetsAllocated + 1;
+                    totalWeight = totalWeight + weight;
+                    
+                    If VerboseMode then begin
+                        symbolName = pmms_strategy_symbol(strategyIdx);
+                        momentum = MapSN.Get(ReturnMap, symbolName);
+                        volatility = MapSN.Get(VolatilityMap, symbolName);
+                        
+                        print("Asset ", assetsAllocated:0:0, ": ", symbolName);
+                        print("  Mom: ", momentum:0:2, "% | Vol: ", volatility:0:2, "%");
+                        print("  Weight: ", weight:0:2, "%");
+                    end;
+                end;
+            end;
+            
+            // Liberar memoria
+            Value1 = ListN.Release(optimalWeights);
+            
+            If VerboseMode then begin
+                print("----------------------------------------");
+                print("Assets Allocated: ", assetsAllocated:0:0);
+                print("Total Weight: ", totalWeight:0:2, "%");
+                print("========================================");
+            end;
+            
+        end;  // Fin del else (CCD retorno pesos volidos)
+        
+    end
+    else begin
+        If VerboseMode then
+            print("WARNING: No assets with positive momentum!");
+    end;
+    
+    // Liberar listas temporales
+    Value1 = ListS.Release(assetSymbols);
+    Value1 = ListN.Release(assetMomentums);
+    Value1 = ListN.Release(assetIndices);
+    Value1 = ListN.Release(topNList);
+end;

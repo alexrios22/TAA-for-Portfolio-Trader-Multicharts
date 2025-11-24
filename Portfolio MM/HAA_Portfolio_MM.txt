@@ -1,0 +1,372 @@
+﻿////////////////////////////////////////////////
+// PMM SIGNAL: HAA_Portfolio_MM
+// Portfolio Money Management para HAA
+// Implementa logica de 3 universos y CPF hobrido
+////////////////////////////////////////////////
+
+Inputs:
+    NumStockPositions(6),       // T: Top N stocks a mantener
+    NumBondPositions(1),        // Top N bonds a mantener
+    RebalanceFrequency(0),      // 0=Monthly, 1=Quarterly, 2=Annually
+    VerboseMode(False);
+
+Vars:
+    portfolioStrategies(0),
+    idx(0),
+    
+    // Contadores por universo
+    totalProtective(0),
+    totalStocks(0),
+    totalBonds(0),
+    negMomentumCanaries(0),
+    posMomentumCanaries(0),
+    negMomentumStocks(0),
+    posMomentumStocks(0),
+    
+    // Variables para colculo
+    momentum(0),
+    assetUniverse(0),
+    strategyIdx(0),
+    
+    // Bond Fraction
+    bondFraction(0),
+    TopR(0),
+    
+    // Pesos
+    weightPerStock(0),
+    weightPerBond(0),
+    
+    // Rebalanceo
+    isRebalanceDay(False),
+    currentMonth(0),
+    
+    // Tracking
+    stocksAllocated(0),
+    bondsAllocated(0);
+
+// Arrays para ranking separado por universo
+array: 
+    protectiveMomentum[2, 10000](0),
+    stockMomentum[2, 10000](0),
+    bondMomentum[2, 10000](0);
+
+// Restricciones
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("HAA Portfolio MM can be applied for MCPortfolio application only.");
+
+once if pmms_strategies_count() > 10000 then
+    raiseruntimeerror("HAA Portfolio MM: too many instruments, max = 10000");
+
+once begin
+    portfolioStrategies = pmms_strategies_count();
+end;
+
+// ================================================
+// DETECTAR DoA DE REBALANCEO
+// ================================================
+
+currentMonth = Month(date);
+isRebalanceDay = False;
+
+If RebalanceFrequency = 0 then begin
+    // Mensual: Ultima barra del mes
+    If LastTradingDayOfMonth then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 1 then begin
+    // Trimestral
+    If LastTradingDayOfMonth AND (currentMonth = 3 OR currentMonth = 6 OR currentMonth = 9 OR currentMonth = 12) then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 2 then begin
+    // Anual
+    If LastTradingDayOfMonth AND currentMonth = 12 then
+        isRebalanceDay = True;
+end;
+
+// Denegar todas las entradas inicialmente
+pmms_strategies_deny_entries_all();
+
+// ================================================
+// PROCESAMIENTO EN DoA DE REBALANCEO
+// ================================================
+
+If isRebalanceDay then begin
+    
+    // ================================================
+    // PASO 1: RECOPILAR Y SEPARAR DATOS POR UNIVERSO
+    // ================================================
+    
+    totalProtective = 0;
+    totalStocks = 0;
+    totalBonds = 0;
+    negMomentumCanaries = 0;
+    negMomentumStocks = 0;
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        momentum = pmms_get_strategy_named_num(idx, "Momentum");
+        assetUniverse = pmms_get_strategy_named_num(idx, "AssetUniverse");
+        
+        // Separar por universo
+        If assetUniverse = 0 then begin
+            // Protective (Canary)
+            totalProtective = totalProtective + 1;
+            protectiveMomentum[1, totalProtective] = momentum;
+            protectiveMomentum[2, totalProtective] = idx;
+            
+            If momentum <= 0 then
+                negMomentumCanaries = negMomentumCanaries + 1;
+        end
+        else If assetUniverse = 1 then begin
+            // Stock
+            totalStocks = totalStocks + 1;
+            stockMomentum[1, totalStocks] = momentum;
+            stockMomentum[2, totalStocks] = idx;
+            
+            If momentum <= 0 then
+                negMomentumStocks = negMomentumStocks + 1;
+        end
+        else If assetUniverse = 2 then begin
+            // Bond
+            totalBonds = totalBonds + 1;
+            bondMomentum[1, totalBonds] = momentum;
+            bondMomentum[2, totalBonds] = idx;
+        end;
+    end;
+    
+    posMomentumCanaries = totalProtective - negMomentumCanaries;
+    posMomentumStocks = totalStocks - negMomentumStocks;
+    
+    // ================================================
+    // PASO 2: CALCULAR CRASH PROTECTION FACTOR (CPF)
+    // ================================================
+    
+    bondFraction = HAA_CalculateCPF(
+        negMomentumCanaries,    // BC: # de canarios malos
+        totalProtective,        // T13: Total canarios
+        NumStockPositions       // T: Top N deseado
+    );
+    
+    // Limitar entre 0-100%
+    bondFraction = MaxList(0, MinList(100, bondFraction));
+    
+    // Calcular TopR: stocks con momentum positivo a mantener
+    // HAA: TopR = Min(T, nomero de stocks con momentum > 0 que caben en 100-BF)
+    TopR = MinList(
+        NumStockPositions,
+        IntPortion((1 - bondFraction / 100) * NumStockPositions)
+    );
+    
+    // Asegurar que TopR no exceda stocks disponibles con momentum positivo
+    TopR = MinList(TopR, posMomentumStocks);
+    
+    If VerboseMode then begin
+        print("========================================");
+        print("HAA REBALANCE: ", Date:0:0);
+        print("========================================");
+        print("PROTECTIVE UNIVERSE (Canaries):");
+        print("  Total Protective: ", totalProtective:0:0);
+        print("  Pos Momentum: ", posMomentumCanaries:0:0);
+        print("  Neg Momentum (BC): ", negMomentumCanaries:0:0);
+        print("  Breadth: ", (posMomentumCanaries / MaxList(1, totalProtective)):0:4);
+        print("----------------------------------------");
+        print("STOCK UNIVERSE:");
+        print("  Total Stocks: ", totalStocks:0:0);
+        print("  Pos Momentum: ", posMomentumStocks:0:0);
+        print("  Neg Momentum: ", negMomentumStocks:0:0);
+        print("----------------------------------------");
+        print("BOND UNIVERSE:");
+        print("  Total Bonds: ", totalBonds:0:0);
+        print("----------------------------------------");
+        print("CRASH PROTECTION (HYBRID):");
+        print("  Bad Canaries: ", negMomentumCanaries:0:0, " / ", totalProtective:0:0);
+        print("  Bond Fraction (BF): ", bondFraction:0:2, "%");
+        print("  TopR Stocks: ", TopR:0:0, " / ", NumStockPositions:0:0);
+        print("========================================");
+    end;
+    
+    // ================================================
+    // PASO 3: RANKING SEPARADO POR UNIVERSO
+    // ================================================
+    
+    // Ordenar protective (solo para monitoreo)
+    If totalProtective > 0 then
+        Sort2DArray(protectiveMomentum, 2, totalProtective, 1);
+    
+    // Ordenar stocks por momentum (mayor a menor)
+    If totalStocks > 0 then
+        Sort2DArray(stockMomentum, 2, totalStocks, 1);
+    
+    // Ordenar bonds por momentum (mayor a menor)
+    If totalBonds > 0 then
+        Sort2DArray(bondMomentum, 2, totalBonds, 1);
+    
+    // ================================================
+    // PASO 4: IDENTIFICAR ASSETS EN TOP N
+    // ================================================
+    
+    // Array para marcar cuales assets deben estar en TopN
+    Array: shouldBeInTopN[10000](False);
+    
+    // IMPORTANTE: Reinicializar array a False
+    For idx = 0 to portfolioStrategies - 1 begin
+        shouldBeInTopN[idx] = False;
+    end;
+    
+    Vars: tempStocksCount(0), tempBondsCount(0);
+    tempStocksCount = 0;
+    tempBondsCount = 0;
+    
+    // Marcar stocks que deben estar (con momentum > 0, hasta TopR)
+    For idx = 1 to totalStocks begin
+        If tempStocksCount >= TopR then
+            break;
+            
+        strategyIdx = stockMomentum[2, idx];
+        momentum = stockMomentum[1, idx];
+        
+        If momentum > 0 then begin
+            shouldBeInTopN[strategyIdx] = True;
+            tempStocksCount = tempStocksCount + 1;
+        end;
+    end;
+    
+    // Marcar bonds que deben estar (hasta NumBondPositions, si bondFraction > 0)
+    If bondFraction > 0 then begin
+        For idx = 1 to totalBonds begin
+            If tempBondsCount >= NumBondPositions then
+                break;
+                
+            strategyIdx = bondMomentum[2, idx];
+            shouldBeInTopN[strategyIdx] = True;
+            tempBondsCount = tempBondsCount + 1;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 5: CERRAR POSICIONES QUE NO ESTaN EN TOP N
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        If pmms_strategy_marketposition(idx) <> 0 then begin
+            If shouldBeInTopN[idx] = False then begin
+                pmms_strategy_close_position(idx);
+                
+                If VerboseMode then
+                    print("Closing: ", pmms_strategy_symbol(idx));
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 6: ASIGNAR STOCKS Y BONDS
+    // ================================================
+    
+    stocksAllocated = 0;
+    bondsAllocated = 0;
+    
+    // --- ASIGNAR STOCKS ---
+    // Solo stocks con momentum > 0, top TopR
+    
+    If TopR > 0 then
+        weightPerStock = (100 - bondFraction) / TopR
+    else
+        weightPerStock = 0;
+    
+    If VerboseMode then begin
+        print("ALLOCATION:");
+        print("  Stock Allocation: ", (100 - bondFraction):0:2, "%");
+        print("  Bond Allocation: ", bondFraction:0:2, "%");
+        print("  Weight per Stock: ", weightPerStock:0:2, "%");
+    end;
+    
+    For idx = 1 to totalStocks begin
+        strategyIdx = stockMomentum[2, idx];
+        momentum = stockMomentum[1, idx];
+        
+        // Solo asignar si:
+        // 1. Momentum > 0
+        // 2. Rank dentro de TopR
+        // 3. Aon hay peso disponible
+        If momentum > 0 and stocksAllocated < TopR and weightPerStock > 0 then begin
+            
+            pmms_strategy_set_entry_contracts(strategyIdx, 
+                IntPortion(Portfolio_Equity * weightPerStock / 100 / Close)
+            );
+            pmms_strategy_allow_long_entries(strategyIdx);
+            
+            stocksAllocated = stocksAllocated + 1;
+            
+            If VerboseMode then
+                print("  STOCK ", stocksAllocated:0:0, ": ", 
+                      pmms_strategy_symbol(strategyIdx), 
+                      " | Mom: ", momentum:0:4, 
+                      " | Weight: ", weightPerStock:0:2, "%");
+        end;
+    end;
+    
+    // --- ASIGNAR BONDS ---
+    // Top NumBondPositions bonds
+    
+    If NumBondPositions > 0 and bondFraction > 0 then
+        weightPerBond = bondFraction / NumBondPositions
+    else
+        weightPerBond = 0;
+    
+    If VerboseMode then
+        print("  Weight per Bond: ", weightPerBond:0:2, "%");
+    
+    For idx = 1 to totalBonds begin
+        strategyIdx = bondMomentum[2, idx];
+        momentum = bondMomentum[1, idx];
+        
+        // Asignar top NumBondPositions bonds
+        If bondsAllocated < NumBondPositions and weightPerBond > 0 then begin
+            
+            pmms_strategy_set_entry_contracts(strategyIdx, 
+                IntPortion(Portfolio_Equity * weightPerBond / 100 / Close)
+            );
+            pmms_strategy_allow_long_entries(strategyIdx);
+            
+            bondsAllocated = bondsAllocated + 1;
+            
+            If VerboseMode then
+                print("  BOND ", bondsAllocated:0:0, ": ", 
+                      pmms_strategy_symbol(strategyIdx), 
+                      " | Mom: ", momentum:0:4, 
+                      " | Weight: ", weightPerBond:0:2, "%");
+        end;
+    end;
+    
+    // ================================================
+    // PASO 6: LOGGING DE UNIVERSO PROTECTIVO
+    // ================================================
+    
+    If VerboseMode then begin
+        print("----------------------------------------");
+        print("PROTECTIVE UNIVERSE (Canaries) DETAIL:");
+        For idx = 1 to totalProtective begin
+            strategyIdx = protectiveMomentum[2, idx];
+            momentum = protectiveMomentum[1, idx];
+            print("  Canary ", idx:0:0, ": ", 
+                  pmms_strategy_symbol(strategyIdx), 
+                  " | Mom: ", momentum:0:4, 
+                  " | Status: ", IFF(momentum > 0, 1, 0));
+        end;
+    end;
+    
+    // ================================================
+    // PASO 7: RESUMEN
+    // ================================================
+    
+    If VerboseMode then begin
+        print("----------------------------------------");
+        print("SUMMARY:");
+        print("  Stocks Allocated: ", stocksAllocated:0:0, " of TopR=", TopR:0:0);
+        print("  Bonds Allocated: ", bondsAllocated:0:0, " of ", NumBondPositions:0:0);
+        print("  Stock Weight Total: ", (stocksAllocated * weightPerStock):0:2, "%");
+        print("  Bond Weight Total: ", (bondsAllocated * weightPerBond):0:2, "%");
+        print("  Total Allocation: ", (stocksAllocated * weightPerStock + bondsAllocated * weightPerBond):0:2, "%");
+        print("========================================");
+    end;
+end;

@@ -1,0 +1,271 @@
+﻿////////////////////////////////////////////////
+// PMM SIGNAL: VAA_Portfolio_MM
+// Portfolio Money Management para VAA
+// Implementa logica de ranking y Bond Fraction
+////////////////////////////////////////////////
+
+Inputs:
+    NumStockPositions(3),       // Top N stocks a mantener
+    NumBondPositions(1),        // Top N bonds a mantener
+    MinBadForFullBonds(1),      // MinB1: bad risky's para BF=100%
+    RebalanceFrequency(0),      // 0=Monthly, 1=Quarterly, 2=Annually
+    VerboseMode(False);
+
+Vars:
+    portfolioStrategies(0),
+    idx(0),
+    jdx(0),
+    
+    // Contadores
+    totalStocks(0),
+    totalBonds(0),
+    negMomentumStocks(0),
+    posMomentumStocks(0),
+    
+    // Variables para colculo
+    momentum(0),
+    assetType(0),
+    strategyIdx(0),
+    
+    // Bond Fraction
+    bondFraction(0),
+    topRiskyCount(0),
+    
+    // Pesos
+    weightPerStock(0),
+    weightPerBond(0),
+    
+    // Rebalanceo
+    isRebalanceDay(False),
+    currentMonth(0),
+
+// Arrays para ranking
+array: 
+    momentumValues[2,10000](0),
+    assetTypes[10000](0);
+
+// Restricciones
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("VAA Portfolio MM can be applied for MCPortfolio application only.");
+
+once if pmms_strategies_count() > 10000 then
+    raiseruntimeerror("VAA Portfolio MM: too many instruments, max = 10000");
+
+once begin
+    portfolioStrategies = pmms_strategies_count();
+end;
+
+// Detectar doa de rebalanceo
+currentMonth = Month(date);
+isRebalanceDay = False;
+
+If RebalanceFrequency = 0 then begin
+    // Mensual: Ultima barra del mes
+    If LastTradingDayOfMonth then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 1 then begin
+    // Trimestral
+    If LastTradingDayOfMonth AND (currentMonth = 3 OR currentMonth = 6 OR currentMonth = 9 OR currentMonth = 12) then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 2 then begin
+    // Anual
+    If LastTradingDayOfMonth AND currentMonth = 12 then
+        isRebalanceDay = True;
+end;
+
+// Denegar todas las entradas inicialmente
+pmms_strategies_deny_entries_all();
+
+// Solo procesar en doas de rebalanceo
+If isRebalanceDay then begin
+    
+    // ================================================
+    // PASO 1: RECOPILAR DATOS DE TODAS LAS ESTRATEGIAS
+    // ================================================
+    
+    totalStocks = 0;
+    totalBonds = 0;
+    negMomentumStocks = 0;
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        momentum = pmms_get_strategy_named_num(idx, "Momentum");
+        assetType = pmms_get_strategy_named_num(idx, "AssetType");
+        
+        momentumValues[1,idx+1] = momentum;
+        momentumValues[2,idx+1] = idx;
+        assetTypes[idx] = assetType;
+        
+        // Contar por tipo
+        If assetType = 1 then begin
+            totalStocks = totalStocks + 1;
+            If momentum <= 0 then
+                negMomentumStocks = negMomentumStocks + 1;
+        end
+        else
+            totalBonds = totalBonds + 1;
+    end;
+    
+    posMomentumStocks = totalStocks - negMomentumStocks;
+    
+    // ================================================
+    // PASO 2: CALCULAR BOND FRACTION (BF)
+    // ================================================
+    
+    // Formula VAA: BF = 100 * Min(1, floor(Top * BR / MinB1) / Top)
+    bondFraction = 0;
+    
+    If MinBadForFullBonds > 0 then begin
+        bondFraction = 100 * MinList(1, 
+            IntPortion(NumStockPositions * negMomentumStocks / MinBadForFullBonds) / NumStockPositions
+        );
+    end;
+    
+    // Limitar entre 0-100%
+    bondFraction = MaxList(0, MinList(100, bondFraction));
+    
+    // Calcular TopR: stocks con momentum positivo a mantener
+    topRiskyCount = IntPortion(
+        MinList(posMomentumStocks, 
+            (1 - bondFraction / 100) * NumStockPositions
+        )
+    );
+    
+    If VerboseMode then begin
+        print("========================================");
+        print("VAA REBALANCE: ", Date:0:0);
+        print("Total Stocks: ", totalStocks:0:0);
+        print("Neg Momentum Stocks: ", negMomentumStocks:0:0);
+        print("Bond Fraction: ", bondFraction:0:2, "%");
+        print("TopR Stocks: ", topRiskyCount:0:0);
+        print("========================================");
+    end;
+    
+    // ================================================
+    // PASO 3: RANKING Y SELECCIoN
+    // ================================================
+    
+    // Ordenar por momentum (mayor a menor)
+    Sort2DArray(momentumValues, 2, portfolioStrategies, 1);
+    
+    // ================================================
+    // PASO 4: IDENTIFICAR ASSETS EN TOP N
+    // ================================================
+    
+    // Array para marcar cuales assets deben estar en TopN
+    Array: shouldBeInTopN[10000](False);
+    
+    // IMPORTANTE: Reinicializar array a False
+    For idx = 0 to portfolioStrategies - 1 begin
+        shouldBeInTopN[idx] = False;
+    end;
+    
+    Vars: tempStocksCount(0), tempBondsCount(0);
+    tempStocksCount = 0;
+    tempBondsCount = 0;
+    
+    // Marcar stocks y bonds que deben estar en TopN
+    For idx = 0 to portfolioStrategies - 1 begin
+        strategyIdx = momentumValues[2, idx+1];
+        momentum = momentumValues[1, idx+1];
+        assetType = assetTypes[strategyIdx];
+        
+        // STOCKS: Marcar TopR con momentum positivo
+        If assetType = 1 and momentum > 0 and tempStocksCount < topRiskyCount then begin
+            shouldBeInTopN[strategyIdx] = True;
+            tempStocksCount = tempStocksCount + 1;
+        end;
+        
+        // BONDS: Marcar Top N bonds si bondFraction > 0
+        If assetType = 0 and tempBondsCount < NumBondPositions and bondFraction > 0 then begin
+            shouldBeInTopN[strategyIdx] = True;
+            tempBondsCount = tempBondsCount + 1;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 5: CERRAR POSICIONES QUE NO ESTaN EN TOP N
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        If pmms_strategy_marketposition(idx) <> 0 then begin
+            // Cerrar si NO debe estar en TopN
+            If shouldBeInTopN[idx] = False then begin
+                pmms_strategy_close_position(idx);
+                
+                If VerboseMode then
+                    print("Closing: ", pmms_strategy_symbol(idx));
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 6: ABRIR/MANTENER POSICIONES DEL TOP N
+    // ================================================
+    
+    // Contadores para tracking
+    Vars: stocksSelected(0), bondsSelected(0);
+    stocksSelected = 0;
+    bondsSelected = 0;
+    
+    // Calcular pesos
+    If topRiskyCount > 0 then
+        weightPerStock = (100 - bondFraction) / topRiskyCount
+    else
+        weightPerStock = 0;
+    
+    If NumBondPositions > 0 and bondFraction > 0 then
+        weightPerBond = bondFraction / NumBondPositions
+    else
+        weightPerBond = 0;
+    
+    // Iterar por ranking (ya ordenado de mejor a peor momentum)
+    For idx = 0 to portfolioStrategies - 1 begin
+        strategyIdx = momentumValues[2,idx+1];
+        momentum = momentumValues[1,idx+1];
+        assetType = assetTypes[strategyIdx];
+        
+        // STOCKS: Seleccionar TopR con momentum positivo
+        If assetType = 1 and momentum > 0 and stocksSelected < topRiskyCount then begin
+            
+            If weightPerStock > 0 then begin
+                pmms_strategy_set_entry_contracts(strategyIdx, 
+                    IntPortion(Portfolio_Equity * weightPerStock / 100 / Close)
+                );
+                pmms_strategy_allow_long_entries(strategyIdx);
+                
+                stocksSelected = stocksSelected + 1;
+                
+                If VerboseMode then
+                    print("STOCK: ", pmms_strategy_symbol(strategyIdx), 
+                          " | Mom: ", momentum:0:2, 
+                          " | Weight: ", weightPerStock:0:2, "%");
+            end;
+        end;
+        
+        // BONDS: Seleccionar Top N bonds
+        If assetType = 0 and bondsSelected < NumBondPositions and bondFraction > 0 then begin
+            
+            If weightPerBond > 0 then begin
+                pmms_strategy_set_entry_contracts(strategyIdx, 
+                    IntPortion(Portfolio_Equity * weightPerBond / 100 / Close)
+                );
+                pmms_strategy_allow_long_entries(strategyIdx);
+                
+                bondsSelected = bondsSelected + 1;
+                
+                If VerboseMode then
+                    print("BOND: ", pmms_strategy_symbol(strategyIdx), 
+                          " | Mom: ", momentum:0:2, 
+                          " | Weight: ", weightPerBond:0:2, "%");
+            end;
+        end;
+    end;
+    
+    If VerboseMode then begin
+        print("Stocks Selected: ", stocksSelected:0:0);
+        print("Bonds Selected: ", bondsSelected:0:0);
+        print("========================================");
+    end;
+end;

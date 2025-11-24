@@ -1,0 +1,418 @@
+﻿////////////////////////////////////////////////
+// PMM SIGNAL: GPM_Portfolio_MM_v2
+// Portfolio Money Management para Generalized Protective Momentum (GPM)
+// CORRECCION v2: Usa retornos logaritmicos para correlacion (PfC)
+// Implementa correlation-hedged momentum con crash protection
+////////////////////////////////////////////////
+
+Inputs:
+    NumRiskyPositions(3),       // Top N risky assets a mantener
+    NumSafetyPositions(1),      // Top N safety assets a mantener
+    HedgeMode(1),               // 0=Raw(R), 1=Multiplied(M), 2=Fractioned(F)
+    CPFLevel(2),                // -1=TopOnly, 0=Low, 1=Medium, 2=High
+    CorLength(12),              // Periodo de correlacion (meses)
+    RebalanceFrequency(0),      // 0=Monthly, 1=Quarterly, 2=Annually
+    VerboseMode(False);
+
+Vars:
+    portfolioStrategies(0),
+    idx(0),
+    jdx(0),
+    
+    // Contadores
+    totalRisky(0),
+    totalSafety(0),
+    negMomentumRisky(0),
+    posMomentumRisky(0),
+    
+    // Variables para calculo
+    avgReturn(0),
+    correlation(0),
+    PfC(0),
+    CorSum(0),
+    hedgedReturn(0),
+    assetType(0),
+    strategyIdx(0),
+    strategyIdx2(0),
+    symbolName(""),
+    symbolName2(""),
+        
+    // Crash Protection Factor
+    wCPF(0),
+    
+    // Pesos
+    weightPerRisky(0),
+    weightPerSafety(0),
+    
+    // Rebalanceo
+    isRebalanceDay(False),
+    currentMonth(0),
+    
+    // Tracking
+    riskyAllocated(0),
+    safetyAllocated(0);
+
+// Arrays para ranking (separados por tipo de activo)
+array: 
+    // Arrays para indices de risky/safety
+    riskyIndices[10000](0),
+    safetyIndices[10000](0),
+    riskyScores[2, 10000](0),
+    safetyScores[2, 10000](0);
+
+// Restricciones
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("GPM Portfolio MM v2 can be applied for MCPortfolio application only.");
+
+once if pmms_strategies_count() > 10000 then
+    raiseruntimeerror("GPM Portfolio MM v2: too many instruments, max = 10000");
+
+once begin
+    portfolioStrategies = pmms_strategies_count();
+end;
+
+// ================================================
+// DETECTAR DIA DE REBALANCEO
+// ================================================
+
+currentMonth = Month(date);
+isRebalanceDay = False;
+
+If RebalanceFrequency = 0 then begin
+    // Mensual: Ultima barra del mes
+    If LastTradingDayOfMonth then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 1 then begin
+    // Trimestral
+    If LastTradingDayOfMonth AND (currentMonth = 3 OR currentMonth = 6 OR currentMonth = 9 OR currentMonth = 12) then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 2 then begin
+    // Anual
+    If LastTradingDayOfMonth AND currentMonth = 12 then
+        isRebalanceDay = True;
+end;
+
+// Denegar todas las entradas inicialmente
+pmms_strategies_deny_entries_all();
+
+// ================================================
+// PROCESAMIENTO EN DIA DE REBALANCEO
+// ================================================
+
+If isRebalanceDay then begin
+    
+    // ================================================
+    // PASO 1: IDENTIFICAR Y CONTAR RISKY/SAFETY ASSETS
+    // ================================================
+    
+    totalRisky = 0;
+    totalSafety = 0;
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        assetType = pmms_get_strategy_named_num(idx, "AssetType");
+        
+        If assetType = 1 then begin
+            // Risky asset
+            riskyIndices[totalRisky] = idx;
+            totalRisky = totalRisky + 1;
+        end
+        else begin
+            // Safety asset
+            safetyIndices[totalSafety] = idx;
+            totalSafety = totalSafety + 1;
+        end;
+    end;
+    
+    If VerboseMode then begin
+        print("========================================");
+        print("GPM REBALANCE v2: ", Date:0:0);
+        print("Hedge Mode: ", HedgeMode:0:0, " (0=R, 1=M, 2=F)");
+        print("Total Risky: ", totalRisky:0:0);
+        print("Total Safety: ", totalSafety:0:0);
+        print("========================================");
+    end;
+    
+    // ================================================
+    // PASO 2: CALCULAR PfC Y HEDGED RETURNS PARA RISKY
+    // ================================================
+    
+    negMomentumRisky = 0;
+    
+    For idx = 0 to totalRisky - 1 begin
+        strategyIdx = riskyIndices[idx];
+        avgReturn = pmms_get_strategy_named_num(strategyIdx, "AvgReturn");
+        symbolName = pmms_strategy_symbol(strategyIdx);
+        
+        // ================================================
+        // CALCULAR PfC (Portfolio Correlation)
+        // Correlacion promedio con TODOS los demos risky assets
+        // ================================================
+        
+        CorSum = 0;
+        
+        For jdx = 0 to totalRisky - 1 begin
+            strategyIdx2 = riskyIndices[jdx];
+            symbolName2 = pmms_strategy_symbol(strategyIdx2);
+            
+            // Calcular correlacion de RETORNOS LOG
+            correlation = GPM_CalculateLogReturnCorrelation_v2(
+                symbolName,
+                symbolName2,
+                CorLength
+            );
+            
+            CorSum = CorSum + correlation;
+        end;
+        
+        // PfC = correlacion promedio (excluyendo diagonal = 1)
+        If totalRisky > 1 then
+            PfC = (CorSum - 1) / (totalRisky - 1)
+        else
+            PfC = 0;
+        
+        // ================================================
+        // APLICAR HEDGE SEGUN MODO
+        // ================================================
+        
+        If HedgeMode = 0 then begin
+            // GPMxR: Raw return (sin hedge)
+            hedgedReturn = avgReturn;
+        end
+        else If HedgeMode = 1 then begin
+            // GPMxM: Correlation Multiplied
+            // ri * (1 - PfC)
+            hedgedReturn = avgReturn * (1 - PfC);
+        end
+        else If HedgeMode = 2 then begin
+            // GPMxF: Correlation Fractioned
+            // ri / (1 + PfC)
+            hedgedReturn = avgReturn / (1 + PfC);
+        end;
+        
+        // Almacenar en array de ranking
+        riskyScores[1, idx+1] = hedgedReturn;
+        riskyScores[2, idx+1] = strategyIdx;
+        
+        If avgReturn <= 0 then
+            negMomentumRisky = negMomentumRisky + 1;
+        
+        If VerboseMode then
+            print("RISKY: ", symbolName, 
+                  " | AvgRet: ", avgReturn:0:4, 
+                  " | PfC: ", PfC:0:4,
+                  " | Hedged: ", hedgedReturn:0:4);
+    end;
+    
+    // ================================================
+    // PASO 3: CALCULAR HEDGED RETURNS PARA SAFETY
+    // ================================================
+    
+    For idx = 0 to totalSafety - 1 begin
+        strategyIdx = safetyIndices[idx];
+        avgReturn = pmms_get_strategy_named_num(strategyIdx, "AvgReturn");
+        symbolName = pmms_strategy_symbol(strategyIdx);
+        
+        // Para safety assets, no se aplica hedge
+        hedgedReturn = avgReturn;
+        
+        // Almacenar en array de ranking
+        safetyScores[1, idx+1] = hedgedReturn;
+        safetyScores[2, idx+1] = strategyIdx;
+        
+        If VerboseMode then
+            print("SAFETY: ", symbolName, 
+                  " | Ret: ", avgReturn:0:4,
+                  " | Hedged: ", hedgedReturn:0:4);
+    end;
+    
+    posMomentumRisky = totalRisky - negMomentumRisky;
+    
+    // ================================================
+    // PASO 4: CALCULAR CRASH PROTECTION FACTOR (CPF)
+    // ================================================
+    
+    wCPF = PAA_CalculateCPF(
+        CPFLevel,
+        totalRisky,
+        posMomentumRisky,
+        NumRiskyPositions
+    );
+    
+    // Limitar entre 0-100%
+    wCPF = MaxList(0, MinList(100, wCPF));
+    
+    If VerboseMode then begin
+        print("----------------------------------------");
+        print("Pos Momentum Risky: ", posMomentumRisky:0:0);
+        print("Neg Momentum Risky: ", negMomentumRisky:0:0);
+        print("CPF Level: ", CPFLevel:0:0);
+        print("wCPF (Safety Allocation): ", wCPF:0:2, "%");
+        print("----------------------------------------");
+    end;
+    
+    // ================================================
+    // PASO 5: RANKING SEPARADO POR TIPO DE ACTIVO
+    // ================================================
+    
+    // Ordenar risky por hedged return (mayor a menor)
+    If totalRisky > 0 then
+        Sort2DArray(riskyScores, 2, totalRisky, 1);
+    
+    // Ordenar safety por hedged return (mayor a menor)
+    If totalSafety > 0 then
+        Sort2DArray(safetyScores, 2, totalSafety, 1);
+    
+    // ================================================
+    // PASO 6: IDENTIFICAR ASSETS EN TOP N
+    // ================================================
+    
+    // Array para marcar cuales assets deben estar en TopN
+    Array: shouldBeInTopN[10000](False);
+    
+    // IMPORTANTE: Reinicializar array a False
+    For idx = 0 to portfolioStrategies - 1 begin
+        shouldBeInTopN[idx] = False;
+    end;
+    
+    Vars: tempRiskyCount(0), tempSafetyCount(0);
+    tempRiskyCount = 0;
+    tempSafetyCount = 0;
+    
+    // Marcar risky assets que deben estar (con avgReturn > 0, hasta NumRiskyPositions)
+    For idx = 1 to totalRisky begin
+        If tempRiskyCount >= NumRiskyPositions then
+            break;
+        
+        strategyIdx = riskyScores[2, idx];
+        avgReturn = pmms_get_strategy_named_num(strategyIdx, "AvgReturn");
+        
+        If avgReturn > 0 then begin
+            shouldBeInTopN[strategyIdx] = True;
+            tempRiskyCount = tempRiskyCount + 1;
+        end;
+    end;
+    
+    // Marcar safety assets que deben estar (hasta NumSafetyPositions, si wCPF > 0)
+    If wCPF > 0 then begin
+        For idx = 1 to totalSafety begin
+            If tempSafetyCount >= NumSafetyPositions then
+                break;
+            
+            strategyIdx = safetyScores[2, idx];
+            shouldBeInTopN[strategyIdx] = True;
+            tempSafetyCount = tempSafetyCount + 1;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 7: CERRAR POSICIONES QUE NO ESTAN EN TOP N
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        If pmms_strategy_marketposition(idx) <> 0 then begin
+            If shouldBeInTopN[idx] = False then begin
+                pmms_strategy_close_position(idx);
+                
+                If VerboseMode then
+                    print("Closing: ", pmms_strategy_symbol(idx));
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 8: ASIGNAR RISKY Y SAFETY ASSETS
+    // ================================================
+    
+    riskyAllocated = 0;
+    safetyAllocated = 0;
+    
+    // --- ASIGNAR RISKY ASSETS ---
+    // Solo risky con avgReturn > 0, top NumRiskyPositions
+    
+    Vars: maxRiskyToAllocate(0);
+    maxRiskyToAllocate = MinList(posMomentumRisky, NumRiskyPositions);
+    
+    If maxRiskyToAllocate > 0 then
+        weightPerRisky = (100 - wCPF) / maxRiskyToAllocate
+    else
+        weightPerRisky = 0;
+    
+    If VerboseMode then
+        print("Weight per Risky: ", weightPerRisky:0:2, "%");
+    
+    For idx = 1 to totalRisky begin
+        strategyIdx = riskyScores[2, idx];
+        hedgedReturn = riskyScores[1, idx];
+        avgReturn = pmms_get_strategy_named_num(strategyIdx, "AvgReturn");
+        
+        // Solo asignar si:
+        // 1. AvgReturn > 0 (momentum absoluto positivo)
+        // 2. Rank dentro de NumRiskyPositions
+        // 3. Aun hay peso disponible (100-wCPF)
+        If avgReturn > 0 and riskyAllocated < NumRiskyPositions and weightPerRisky > 0 then begin
+            
+            pmms_strategy_set_entry_contracts(strategyIdx, 
+                IntPortion(Portfolio_Equity * weightPerRisky / 100 / Close)
+            );
+            pmms_strategy_allow_long_entries(strategyIdx);
+            
+            riskyAllocated = riskyAllocated + 1;
+            
+            If VerboseMode then
+                print("RISKY ", riskyAllocated:0:0, ": ", 
+                      pmms_strategy_symbol(strategyIdx), 
+                      " | Score: ", hedgedReturn:0:4, 
+                      " | Weight: ", weightPerRisky:0:2, "%");
+        end;
+    end;
+    
+    // --- ASIGNAR SAFETY ASSETS ---
+    // Top NumSafetyPositions safety (sin restriccion de momentum)
+    
+    If NumSafetyPositions > 0 and wCPF > 0 then
+        weightPerSafety = wCPF / NumSafetyPositions
+    else
+        weightPerSafety = 0;
+    
+    If VerboseMode then
+        print("Weight per Safety: ", weightPerSafety:0:2, "%");
+    
+    For idx = 1 to totalSafety begin
+        strategyIdx = safetyScores[2, idx];
+        hedgedReturn = safetyScores[1, idx];
+        
+        // Asignar top NumSafetyPositions safety
+        If safetyAllocated < NumSafetyPositions and weightPerSafety > 0 then begin
+            
+            pmms_strategy_set_entry_contracts(strategyIdx, 
+                IntPortion(Portfolio_Equity * weightPerSafety / 100 / Close)
+            );
+            pmms_strategy_allow_long_entries(strategyIdx);
+            
+            safetyAllocated = safetyAllocated + 1;
+            
+            If VerboseMode then
+                print("SAFETY ", safetyAllocated:0:0, ": ", 
+                      pmms_strategy_symbol(strategyIdx), 
+                      " | Score: ", hedgedReturn:0:4, 
+                      " | Weight: ", weightPerSafety:0:2, "%");
+        end;
+    end;
+    
+    // ================================================
+    // PASO 9: RESUMEN
+    // ================================================
+    
+    If VerboseMode then begin
+        print("========================================");
+        print("SUMMARY:");
+        print("Risky Allocated: ", riskyAllocated:0:0, " of ", NumRiskyPositions:0:0);
+        print("Safety Allocated: ", safetyAllocated:0:0, " of ", NumSafetyPositions:0:0);
+        print("Risky Weight Total: ", (riskyAllocated * weightPerRisky):0:2, "%");
+        print("Safety Weight Total: ", (safetyAllocated * weightPerSafety):0:2, "%");
+        print("========================================");
+    end;
+end;
+

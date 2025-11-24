@@ -1,0 +1,352 @@
+﻿////////////////////////////////////////////////
+// PMM SIGNAL: FAA_Portfolio_MM
+// Portfolio Money Management para FAA
+// Implementa logica de ranking de momentum, volatilidad y correlacion
+////////////////////////////////////////////////
+
+Inputs:
+    NumStockPositions(6),       // Top N stocks a mantener
+    NumBondPositions(1),        // Top N bonds a mantener
+    CorLength(4),               //Correlation Period
+    wM(1.0),                    // weight of momentum
+    wV(0.5),                    // weight of volatility
+    wC(0.5),                    // weight of correlation
+    RebalanceFrequency(0),      // 0=Monthly, 1=Quarterly, 2=Annually
+    VerboseMode(False);
+
+Vars:
+    portfolioStrategies(0),
+    idx(0),
+    jdx(0),
+    
+    // Contadores por universo
+    totalStocks(0),
+    totalBonds(0),
+    negMomentumStocks(0),
+    posMomentumStocks(0),
+    
+    // Variables para calculo
+    momentum(0),
+    volatility(0),
+    assetUniverse(0),
+    strategyIdx(0),
+    strategyIdx2(0),
+    
+    // Correlacion
+    correlation(0),
+    PfC(0),
+    CorSum(0),
+    symbol1(""),
+    symbol2(""),
+       
+    // Pesos
+    weightPerStock(0),
+    weightPerBond(0),
+    
+    // Rebalanceo
+    isRebalanceDay(False),
+    currentMonth(0);
+
+// Arrays para ranking
+array: 
+    // Arrays originales [momentum, index]
+    FAAMomentum[2, 10000](0),
+    FAAVolatility[2, 10000](0),
+    FAACorrelation[2, 10000](0),
+    
+    // Arrays para ranking combinado [combinedScore, index]
+    FAACompositeScore[2, 10000](0),
+    
+    // Array para tracking de universos
+    assetUniverses[10000](0),
+    
+    // Array para stocks seleccionados (para correlacion)
+    selectedStocks[10000](0);
+
+// Restricciones
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("FAA Portfolio MM can be applied for MCPortfolio application only.");
+
+once if pmms_strategies_count() > 10000 then
+    raiseruntimeerror("FAA Portfolio MM: too many instruments, max = 10000");
+
+once begin
+    portfolioStrategies = pmms_strategies_count();
+end;
+
+// ================================================
+// DETECTAR DIA DE REBALANCEO
+// ================================================
+
+currentMonth = Month(date);
+isRebalanceDay = False;
+
+If RebalanceFrequency = 0 then begin
+    // Mensual: Ultima barra del mes
+    If LastTradingDayOfMonth then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 1 then begin
+    // Trimestral
+    If LastTradingDayOfMonth AND (currentMonth = 3 OR currentMonth = 6 OR currentMonth = 9 OR currentMonth = 12) then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 2 then begin
+    // Anual
+    If LastTradingDayOfMonth AND currentMonth = 12 then
+        isRebalanceDay = True;
+end;
+
+pmms_strategies_deny_entries_all();
+
+// ================================================
+// PROCESAMIENTO EN DIA DE REBALANCEO
+// ================================================
+
+If isRebalanceDay then begin
+    
+    // ================================================
+    // PASO 1: RECOPILAR DATOS Y SEPARAR POR UNIVERSO
+    // ================================================
+    
+    totalStocks = 0;
+    totalBonds = 0;
+    negMomentumStocks = 0;
+    PfC = 0;
+    CorSum = 0;
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        momentum = pmms_get_strategy_named_num(idx, "Momentum");
+        volatility = pmms_get_strategy_named_num(idx, "Volatility");
+        assetUniverse = pmms_get_strategy_named_num(idx, "AssetUniverse");
+        symbol1 = pmms_strategy_symbol(idx);
+        assetUniverses[idx] = assetUniverse;
+        
+        If assetUniverse = 1 then begin
+            // Stock
+            totalStocks = totalStocks + 1;
+            
+            For jdx = 0 to portfolioStrategies - 1 begin
+        		symbol2 = pmms_strategy_symbol(jdx);
+        		
+        		If pmms_get_strategy_named_num(jdx, "AssetUniverse") = 1 then 
+	 			correlation = FAA_CalculateCorrelation(
+	                            symbol1,
+	                            symbol2,
+	                            CorLength
+	                        );
+			CorSum += correlation;
+        	end;
+           PfC = ( CorSum - 1 ) / ( totalStocks - 1 );
+           
+            FAAMomentum[1, idx+1] = momentum; // highest is best
+            FAAMomentum[2, idx+1] = idx;
+            FAAVolatility[1, idx+1] = -1*volatility;// lowest is best
+            FAAVolatility[2, idx+1] = idx;
+            FAACorrelation[1, idx+1] = -1*PfC; // lowest is best
+            FAACorrelation[2, idx+1] = idx;
+
+            If momentum <= 0 then
+                negMomentumStocks = negMomentumStocks + 1;
+        end
+        else If assetUniverse = 0 then begin
+            // Bond
+            totalBonds = totalBonds + 1;
+        end;
+    end;
+    
+    posMomentumStocks = totalStocks - negMomentumStocks;
+    
+    // ================================================
+    // PASO 2: RANKING COMBINADO (MOMENTUM, VOLATILIDAD y CORRELACION)
+    // ================================================
+    
+    // Ordenar por momentum (descendente: mejor primero)
+    Sort2DArray(FAAMomentum, 2, portfolioStrategies - 1, -1);
+    
+    // Ordenar por volatilidad y correlacion (ascendente: menor vol primero)
+    Sort2DArray(FAAVolatility, 2, portfolioStrategies - 1, 1);
+    Sort2DArray(FAACorrelation, 2, portfolioStrategies - 1, 1);
+    
+    
+    // Crear ranking combinado
+    // RankCombined = (RankMom + RankVol) / 2
+    
+    Vars: rankMom(0), rankVol(0), rankCorr(0), combinedRank(0);
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        // Encontrar posicion en ranking de momentum
+        rankMom = 0;
+        For jdx = 1 to portfolioStrategies begin
+            If FAAMomentum[2, jdx] = idx then begin
+                rankMom = jdx;
+                break;
+            end;
+        end;
+        
+        // Encontrar posicion en ranking de volatilidad
+        rankVol = 0;
+        For jdx = 1 to portfolioStrategies begin
+            If FAAVolatility[2, jdx] = idx then begin
+                rankVol = jdx;
+                break;
+            end;
+        end;
+        
+        rankCorr = 0;
+        For jdx = 1 to portfolioStrategies begin
+            If FAACorrelation[2, jdx] = idx then begin
+                rankCorr = jdx;
+                break;
+            end;
+        end;
+
+        // Calcular ranking combinado (menor es mejor)
+        combinedRank = ( wM + 0.001 ) * RankMom + wV * RankVol + wC * RankCorr;;
+        
+        FAACompositeScore[1, idx+1] = combinedRank;
+        FAACompositeScore[2, idx+1] = idx;
+    end;
+    
+    // Ordenar por ranking combinado (ascendente: mejor primero)
+    Sort2DArray(FAACompositeScore, 2, portfolioStrategies-1, 1);
+ 
+    // ================================================
+    // PASO 3: IDENTIFICAR ASSETS EN TOP N
+    // ================================================
+    
+    // Array para marcar cuales assets deben estar en TopN
+    Array: shouldBeInTopN[10000](False);
+    
+    // IMPORTANTE: Reinicializar array a False
+    For idx = 0 to portfolioStrategies - 1 begin
+        shouldBeInTopN[idx] = False;
+    end;
+    
+    Vars: tempStocksCount(0), tempBondsCount(0), tempMom(0);
+    tempStocksCount = 0;
+    tempBondsCount = 0;
+    
+    // Marcar stocks que deben estar (con momentum > 0, hasta NumStockPositions)
+    For idx = 0 to portfolioStrategies - 1 begin
+        If tempStocksCount >= NumStockPositions then
+            break;
+            
+        strategyIdx = FAACompositeScore[2, idx+1];
+        assetUniverse = assetUniverses[strategyIdx];
+        tempMom = pmms_get_strategy_named_num(strategyIdx, "Momentum");
+        
+        If assetUniverse = 1 and tempMom > 0 then begin
+            shouldBeInTopN[strategyIdx] = True;
+            tempStocksCount = tempStocksCount + 1;
+        end;
+    end;
+    
+    // Marcar bonds que deben estar (hasta NumBondPositions)
+    For idx = 0 to portfolioStrategies - 1 begin
+        If tempBondsCount >= NumBondPositions then
+            break;
+            
+        assetUniverse = assetUniverses[idx];
+        
+        If assetUniverse = 0 then begin
+            shouldBeInTopN[idx] = True;
+            tempBondsCount = tempBondsCount + 1;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 4: CERRAR POSICIONES QUE NO ESTAN EN TOP N
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        If pmms_strategy_marketposition(idx) <> 0 then begin
+            If shouldBeInTopN[idx] = False then begin
+                pmms_strategy_close_position(idx);
+                
+                If VerboseMode then
+                    print("Closing: ", pmms_strategy_symbol(idx));
+            end;
+        end;
+    end;
+   
+    // ================================================
+    // PASO 5: ASIGNAR PESOS Y PERMITIR ENTRADAS
+    // ================================================
+    
+    // Contadores para tracking
+    Vars: stocksSelected(0), bondsSelected(0);
+    
+    stocksSelected = 0;
+    bondsSelected = 0;
+    
+    // Calcular peso por posicion
+    If NumStockPositions > 0 then
+        weightPerStock = 100.0 / NumStockPositions
+    else
+        weightPerStock = 0;
+    
+    // Iterar por ranking (ya ordenado de mejor a peor por composite score)
+    For idx = 0 to portfolioStrategies - 1 begin
+        If stocksSelected >= NumStockPositions and bondsSelected >= NumBondPositions then
+            break;
+            
+        strategyIdx = FAACompositeScore[2, idx+1];
+        assetUniverse = assetUniverses[strategyIdx];
+        momentum = pmms_get_strategy_named_num(strategyIdx, "Momentum");
+        
+        // STOCKS: Seleccionar con momentum positivo, hasta NumStockPositions
+        If assetUniverse = 1 and momentum > 0 and stocksSelected < NumStockPositions then begin
+            
+            pmms_strategy_set_entry_contracts(strategyIdx, 
+                IntPortion(Portfolio_Equity * weightPerStock / 100 / Close)
+            );
+            pmms_strategy_allow_long_entries(strategyIdx);
+            
+            stocksSelected = stocksSelected + 1;
+            
+            If VerboseMode then
+                print("STOCK: ", pmms_strategy_symbol(strategyIdx), 
+                      " | Mom: ", momentum:0:4, 
+                      " | Weight: ", weightPerStock:0:2, "%");
+        end;
+        
+        // BONDS: Seleccionar hasta NumBondPositions
+        If assetUniverse = 0 and bondsSelected < NumBondPositions then begin
+            
+            // Calcular peso de bonds basado en stocks asignados
+            If stocksSelected > 0 then
+                weightPerBond = 100 - (stocksSelected * weightPerStock)
+            else
+                weightPerBond = 100;
+            
+            pmms_strategy_set_entry_contracts(strategyIdx, 
+                IntPortion(Portfolio_Equity * weightPerBond / 100 / Close)
+            );
+            pmms_strategy_allow_long_entries(strategyIdx);
+            
+            bondsSelected = bondsSelected + 1;
+            
+            If VerboseMode then
+                print("BOND: ", pmms_strategy_symbol(strategyIdx), 
+                      " | Mom: ", momentum:0:4, 
+                      " | Weight: ", weightPerBond:0:2, "%");
+        end;
+    end;
+ 
+    // ================================================
+    // PASO 6: RESUMEN
+    // ================================================
+    
+    If VerboseMode then begin
+        print("----------------------------------------");
+        print("SUMMARY:");
+        print("Stocks Allocated: ", stocksSelected:0:0, " of TopR=", NumStockPositions:0:0);
+        print("Bonds Allocated: ", bondsSelected:0:0, " of ", NumBondPositions:0:0);
+        print("Stock Weight Total: ", (stocksSelected * weightPerStock):0:2, "%");
+        print("Bond Weight Total: ", (bondsSelected * weightPerBond):0:2, "%");
+        print("Total Allocation: ", (stocksSelected * weightPerStock + bondsSelected * weightPerBond):0:2, "%");
+        print("========================================");
+    end;
+end;
+

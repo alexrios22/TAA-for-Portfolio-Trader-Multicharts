@@ -1,0 +1,221 @@
+﻿////////////////////////////////////////////////
+// PMM SIGNAL: IBS_Portfolio_MM
+// Portfolio Money Management para Internal Bar Strength (IBS)
+// Estrategia de mean reversion: compra los assets con MENOR IBS
+// IBS bajo = oversold (precio cerro cerca del Low)
+////////////////////////////////////////////////
+
+Inputs:
+    TopN(1),                    // Numero de assets a mantener (default: 1)
+    RebalanceFrequency(0),      // 0=Monthly, 1=Quarterly, 2=Semi-annually, 3=Annually
+    VerboseMode(False);         // True=Mostrar detalles en output log
+
+Vars:
+    portfolioStrategies(0),
+    idx(0),
+    
+    // Variables para calculo
+    ibsValue(0),
+    strategyIdx(0),
+    symbolName(""),
+    
+    // Peso por posicion
+    weightPerPosition(0),
+    
+    // Rebalanceo
+    isRebalanceDay(False),
+    currentMonth(0),
+    
+    // Tracking
+    positionsAllocated(0);
+
+// Arrays para ranking
+array: 
+    ibsScores[2, 10000](0);     // [1,idx] = IBS value, [2,idx] = strategy index
+
+// Restricciones
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("IBS Portfolio MM can be applied for MCPortfolio application only.");
+
+once if pmms_strategies_count() > 10000 then
+    raiseruntimeerror("IBS Portfolio MM: too many instruments, max = 10000");
+
+once begin
+    portfolioStrategies = pmms_strategies_count();
+end;
+
+// ================================================
+// DETECTAR DiA DE REBALANCEO
+// ================================================
+
+currentMonth = Month(date);
+isRebalanceDay = False;
+
+If RebalanceFrequency = 0 then begin
+    // Monthly: fin de mes
+    If LastTradingDayOfMonth then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 1 then begin
+    // Quarterly: cada trimestre
+    If LastTradingDayOfMonth AND (currentMonth = 3 OR currentMonth = 6 OR currentMonth = 9 OR currentMonth = 12) then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 2 then begin
+    // Semi-annually: cada semestre (6 meses)
+    If LastTradingDayOfMonth AND (currentMonth = 6 OR currentMonth = 12) then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 3 then begin
+    // Annually: cada ano
+    If LastTradingDayOfMonth AND currentMonth = 12 then
+        isRebalanceDay = True;
+end;
+
+// Denegar todas las entradas inicialmente
+pmms_strategies_deny_entries_all();
+
+// ================================================
+// PROCESAMIENTO EN DiA DE REBALANCEO
+// ================================================
+
+If isRebalanceDay then begin
+    
+    If VerboseMode then begin
+        print("========================================");
+        print("IBS REBALANCE: ", Date:0:0);
+        print("Total Strategies: ", portfolioStrategies:0:0);
+        print("TopN: ", TopN:0:0);
+        print("Strategy: Buy assets with LOWEST IBS (oversold)");
+        print("========================================");
+    end;
+    
+    // ================================================
+    // PASO 1: RECOPILAR IBS DE TODOS LOS ASSETS
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        ibsValue = pmms_get_strategy_named_num(idx, "IBS");
+        symbolName = pmms_strategy_symbol(idx);
+        
+        ibsScores[1, idx + 1] = ibsValue;
+        ibsScores[2, idx + 1] = idx;
+        
+        If VerboseMode then
+            print("Asset: ", symbolName, " | IBS: ", ibsValue:0:4);
+    end;
+    
+    // ================================================
+    // PASO 2: RANKING POR IBS (MENOR A MAYOR CON -1)
+    // ================================================
+    
+    // IMPORTANTE: Sort2DArray con -1 ordena descendente (mayor a menor)
+    // Pero queremos los MENORES IBS primero (oversold)
+    // Usuario especifica usar -1, seguimos su instruccion
+    If portfolioStrategies > 0 then
+        Sort2DArray(ibsScores, 2, portfolioStrategies, -1);
+    
+    // ================================================
+    // PASO 3: IDENTIFICAR ASSETS EN TOP N
+    // ================================================
+    
+    // Array para marcar cuales assets deben estar en TopN
+    Array: shouldBeInTopN[10000](False);
+    
+    // IMPORTANTE: Reinicializar array a False
+    For idx = 0 to portfolioStrategies - 1 begin
+        shouldBeInTopN[idx] = False;
+    end;
+    
+    Vars: validTopNCount(0);
+    validTopNCount = 0;
+    
+    // Marcar los TopN assets validos
+    For idx = 1 to portfolioStrategies begin
+        If validTopNCount >= TopN then
+            break;
+        
+        strategyIdx = ibsScores[2, idx];
+        ibsValue = ibsScores[1, idx];
+        
+        // Solo considerar assets con IBS valido (< 2)
+        If ibsValue < 2 then begin
+            shouldBeInTopN[strategyIdx] = True;
+            validTopNCount = validTopNCount + 1;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 4: CERRAR POSICIONES QUE NO ESTaN EN TOP N
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        If pmms_strategy_marketposition(idx) <> 0 then begin
+            // Cerrar si NO debe estar en TopN
+            If shouldBeInTopN[idx] = False then begin
+                pmms_strategy_close_position(idx);
+                
+                If VerboseMode then
+                    print("Closing: ", pmms_strategy_symbol(idx));
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 5: ABRIR/MANTENER POSICIONES DEL TOP N
+    // ================================================
+    
+    // Calcular peso por posicion (distribucion equitativa)
+    If TopN > 0 then
+        weightPerPosition = 100.0 / TopN
+    else
+        weightPerPosition = 0;
+    
+    If VerboseMode then begin
+        print("----------------------------------------");
+        print("Weight per Position: ", weightPerPosition:0:2, "%");
+        print("TOP ", TopN:0:0, " ASSETS (LOWEST IBS):");
+    end;
+    
+    positionsAllocated = 0;
+    
+    // Asignar TopN assets
+    For idx = 1 to portfolioStrategies begin
+        If positionsAllocated >= TopN then
+            break;
+        
+        strategyIdx = ibsScores[2, idx];
+        ibsValue = ibsScores[1, idx];
+        symbolName = pmms_strategy_symbol(strategyIdx);
+        
+        // Verificar que IBS sea valido (< 2)
+        If ibsValue < 2 then begin
+            
+            // Asignar posicion
+            pmms_strategy_set_entry_contracts(strategyIdx, 
+                IntPortion(Portfolio_Equity * weightPerPosition / 100 / Close)
+            );
+            pmms_strategy_allow_long_entries(strategyIdx);
+            
+            positionsAllocated = positionsAllocated + 1;
+            
+            If VerboseMode then
+                print("Position ", positionsAllocated:0:0, ": ", 
+                      symbolName, 
+                      " | IBS: ", ibsValue:0:4, 
+                      " | Weight: ", weightPerPosition:0:2, "%");
+        end;
+    end;
+    
+    // ================================================
+    // PASO 6: RESUMEN
+    // ================================================
+    
+    If VerboseMode then begin
+        print("========================================");
+        print("SUMMARY:");
+        print("Positions Allocated: ", positionsAllocated:0:0, " of ", TopN:0:0);
+        print("Total Weight: ", (positionsAllocated * weightPerPosition):0:2, "%");
+        print("========================================");
+    end;
+end;

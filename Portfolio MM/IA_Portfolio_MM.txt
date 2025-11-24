@@ -1,0 +1,216 @@
+﻿////////////////////////////////////////////////
+// PMM SIGNAL: IA_Portfolio_MM
+// Portfolio Money Management para Inercia Alcista (IA)
+// Selecciona TopN assets con mayor IA y distribuye capital equitativamente
+////////////////////////////////////////////////
+
+Inputs:
+    TopN(5),                    // Numero de assets a mantener
+    RebalanceFrequency(0),      // 0=Monthly, 1=Quarterly, 2=Annually
+    VerboseMode(False);         // True=Mostrar detalles en output log
+
+Vars:
+    portfolioStrategies(0),
+    idx(0),
+    
+    // Variables para calculo
+    iaMomentum(0),
+    strategyIdx(0),
+    symbolName(""),
+    
+    // Peso por posicion
+    weightPerPosition(0),
+    
+    // Rebalanceo
+    isRebalanceDay(False),
+    currentMonth(0),
+    
+    // Tracking
+    positionsAllocated(0);
+
+// Arrays para ranking
+array: 
+    iaScores[2, 10000](0);      // [1,idx] = IA score, [2,idx] = strategy index
+
+// Restricciones
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("IA Portfolio MM can be applied for MCPortfolio application only.");
+
+once if pmms_strategies_count() > 10000 then
+    raiseruntimeerror("IA Portfolio MM: too many instruments, max = 10000");
+
+once begin
+    portfolioStrategies = pmms_strategies_count();
+end;
+
+// ================================================
+// DETECTAR DiA DE REBALANCEO
+// ================================================
+
+currentMonth = Month(date);
+isRebalanceDay = False;
+
+If RebalanceFrequency = 0 then begin
+    // Mensual: Ultima barra del mes
+    If LastTradingDayOfMonth then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 1 then begin
+    // Trimestral
+    If LastTradingDayOfMonth AND (currentMonth = 3 OR currentMonth = 6 OR currentMonth = 9 OR currentMonth = 12) then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 2 then begin
+    // Anual
+    If LastTradingDayOfMonth AND currentMonth = 12 then
+        isRebalanceDay = True;
+end;
+
+// Denegar todas las entradas inicialmente
+pmms_strategies_deny_entries_all();
+
+// ================================================
+// PROCESAMIENTO EN DiA DE REBALANCEO
+// ================================================
+
+If isRebalanceDay then begin
+    
+    If VerboseMode then begin
+        print("========================================");
+        print("IA REBALANCE: ", Date:0:0);
+        print("Total Strategies: ", portfolioStrategies:0:0);
+        print("TopN: ", TopN:0:0);
+        print("========================================");
+    end;
+    
+    // ================================================
+    // PASO 1: RECOPILAR IA MOMENTUM DE TODOS LOS ASSETS
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        iaMomentum = pmms_get_strategy_named_num(idx, "IAMomentum");
+        symbolName = pmms_strategy_symbol(idx);
+        
+        iaScores[1, idx + 1] = iaMomentum;
+        iaScores[2, idx + 1] = idx;
+        
+        If VerboseMode then
+            print("Asset: ", symbolName, " | IA: ", iaMomentum:0:4);
+    end;
+    
+    // ================================================
+    // PASO 2: RANKING POR IA MOMENTUM (MAYOR A MENOR)
+    // ================================================
+    
+    If portfolioStrategies > 0 then
+        Sort2DArray(iaScores, 2, portfolioStrategies, 1);
+    
+    // ================================================
+    // PASO 3: IDENTIFICAR ASSETS EN TOP N
+    // ================================================
+    
+    // Array para marcar cuales assets deben estar en TopN
+    Array: shouldBeInTopN[10000](False);
+    
+    // IMPORTANTE: Reinicializar array a False
+    For idx = 0 to portfolioStrategies - 1 begin
+        shouldBeInTopN[idx] = False;
+    end;
+    
+    Vars: validAssets(0);
+    validAssets = 0;
+    
+    // Marcar los TopN assets validos (con IA > 0)
+    For idx = 1 to portfolioStrategies begin
+        If validAssets >= TopN then
+            break;
+        
+        strategyIdx = iaScores[2, idx];
+        iaMomentum = iaScores[1, idx];
+        
+        // Solo considerar assets con IA > 0
+        If iaMomentum > 0 then begin
+            shouldBeInTopN[strategyIdx] = True;
+            validAssets = validAssets + 1;
+        end;
+    end;
+    
+    If VerboseMode then begin
+        print("----------------------------------------");
+        print("Assets with IA > 0 in TopN: ", validAssets:0:0);
+    end;
+    
+    // ================================================
+    // PASO 4: CERRAR POSICIONES QUE NO ESTaN EN TOP N
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        If pmms_strategy_marketposition(idx) <> 0 then begin
+            // Cerrar si NO debe estar en TopN
+            If shouldBeInTopN[idx] = False then begin
+                pmms_strategy_close_position(idx);
+                
+                If VerboseMode then
+                    print("Closing: ", pmms_strategy_symbol(idx));
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 5: ABRIR/MANTENER POSICIONES DEL TOP N
+    // ================================================
+    
+    positionsAllocated = 0;
+    
+    // Calcular peso por posicion segun assets validos
+    If validAssets > 0 then
+        weightPerPosition = 100.0 / validAssets
+    else
+        weightPerPosition = 0;
+    
+    If VerboseMode then begin
+        print("Positions to allocate: ", validAssets:0:0);
+        print("Weight per Position: ", weightPerPosition:0:2, "%");
+        print("TOP ASSETS WITH IA > 0:");
+    end;
+    
+    // Asignar solo assets con IA > 0, hasta TopN
+    For idx = 1 to portfolioStrategies begin
+        If positionsAllocated >= validAssets then
+            break;
+        
+        strategyIdx = iaScores[2, idx];
+        iaMomentum = iaScores[1, idx];
+        symbolName = pmms_strategy_symbol(strategyIdx);
+        
+        // Solo asignar si IA > 0
+        If iaMomentum > 0 then begin
+            
+            // Asignar posicion
+            pmms_strategy_set_entry_contracts(strategyIdx, 
+                IntPortion(Portfolio_Equity * weightPerPosition / 100 / Close)
+            );
+            pmms_strategy_allow_long_entries(strategyIdx);
+            
+            positionsAllocated = positionsAllocated + 1;
+            
+            If VerboseMode then
+                print("Position ", positionsAllocated:0:0, ": ", 
+                      symbolName, 
+                      " | IA: ", iaMomentum:0:4, 
+                      " | Weight: ", weightPerPosition:0:2, "%");
+        end;
+    end;
+    
+    // ================================================
+    // PASO 6: RESUMEN
+    // ================================================
+    
+    If VerboseMode then begin
+        print("========================================");
+        print("SUMMARY:");
+        print("Positions Allocated: ", positionsAllocated:0:0, " of ", TopN:0:0);
+        print("Total Weight: ", (positionsAllocated * weightPerPosition):0:2, "%");
+        print("========================================");
+    end;
+end;

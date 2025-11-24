@@ -1,0 +1,250 @@
+﻿////////////////////////////////////////////////
+// PMM SIGNAL: GEM_Portfolio_MM
+// Portfolio Money Management para GEM (Dual Momentum)
+// Implementa logica de Absolute + Relative Momentum
+// Universo: IVV (US), VEU (Intl), BND (Bonds), BIL (Cash)
+////////////////////////////////////////////////
+
+Inputs:
+    UseFallbackToCash(True),    // Si TRUE, usa BIL cuando BND tambion es negativo
+    RebalanceFrequency(0),      // 0=Monthly, 1=Quarterly
+    VerboseMode(False);
+
+Vars:
+    portfolioStrategies(0),
+    idx(0),
+    
+    // ondices de activos
+    idxUS(0),
+    idxIntl(0),
+    idxBonds(0),
+    idxCash(0),
+    
+    // Momentum de cada activo
+    momUS(0),
+    momIntl(0),
+    momBonds(0),
+    momCash(0),
+    
+    // Variables de decision
+    assetType(0),
+    momentum(0),
+    selectedIdx(-1),
+    selectedName(""),
+    
+    // Rebalanceo
+    isRebalanceDay(False),
+    currentMonth(0),
+    
+    // Tracking
+    foundUS(False),
+    foundIntl(False),
+    foundBonds(False),
+    foundCash(False);
+
+// Restricciones
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("GEM Portfolio MM can be applied for MCPortfolio application only.");
+
+once if pmms_strategies_count() > 10 then
+    raiseruntimeerror("GEM Portfolio MM: max 10 instruments");
+
+once begin
+    portfolioStrategies = pmms_strategies_count();
+    
+    // Validar que tengamos al menos US, Intl y Bonds
+    If portfolioStrategies < 3 then
+        raiseruntimeerror("GEM requires at least 3 instruments: US, International, Bonds");
+end;
+
+// ================================================
+// DETECTAR DoA DE REBALANCEO
+// ================================================
+
+currentMonth = Month(date);
+isRebalanceDay = False;
+
+If RebalanceFrequency = 0 then begin
+    // Mensual: Ultima barra del mes
+    If LastTradingDayOfMonth then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 1 then begin
+    // Trimestral
+    If LastTradingDayOfMonth AND (currentMonth = 3 OR currentMonth = 6 OR currentMonth = 9 OR currentMonth = 12) then
+        isRebalanceDay = True;
+end;
+
+// Denegar todas las entradas inicialmente
+pmms_strategies_deny_entries_all();
+
+// ================================================
+// PROCESAMIENTO EN DoA DE REBALANCEO
+// ================================================
+
+If isRebalanceDay then begin
+    
+    // ================================================
+    // PASO 1: IDENTIFICAR ACTIVOS Y RECOPILAR MOMENTUM
+    // ================================================
+    
+    foundUS = False;
+    foundIntl = False;
+    foundBonds = False;
+    foundCash = False;
+    
+    momUS = 0;
+    momIntl = 0;
+    momBonds = 0;
+    momCash = 0;
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        momentum = pmms_get_strategy_named_num(idx, "Momentum");
+        assetType = pmms_get_strategy_named_num(idx, "AssetType");
+        
+        // Identificar cada activo por AssetType
+        If assetType = 0 then begin
+            // US Stocks (IVV)
+            idxUS = idx;
+            momUS = momentum;
+            foundUS = True;
+        end
+        else If assetType = 1 then begin
+            // International Stocks (VEU)
+            idxIntl = idx;
+            momIntl = momentum;
+            foundIntl = True;
+        end
+        else If assetType = 2 then begin
+            // Bonds (BND)
+            idxBonds = idx;
+            momBonds = momentum;
+            foundBonds = True;
+        end
+        else If assetType = 3 then begin
+            // Cash (BIL)
+            idxCash = idx;
+            momCash = momentum;
+            foundCash = True;
+        end;
+    end;
+    
+    // Validar que tengamos los activos principales
+    If not foundUS or not foundIntl or not foundBonds then
+        raiseruntimeerror("GEM requires US, International and Bonds assets");
+    
+    If VerboseMode then begin
+        print("========================================");
+        print("GEM REBALANCE: ", Date:0:0);
+        print("========================================");
+        print("MOMENTUM READINGS:");
+        print("  US Stocks (IVV): ", momUS:0:2, "%");
+        print("  Intl Stocks (VEU): ", momIntl:0:2, "%");
+        print("  Bonds (BND): ", momBonds:0:2, "%");
+        If foundCash then
+            print("  Cash (BIL): ", momCash:0:2, "%");
+        print("----------------------------------------");
+    end;
+    
+    // ================================================
+    // PASO 2: APLICAR DUAL MOMENTUM
+    // ================================================
+    
+    selectedIdx = -1;
+    selectedName = "";
+    
+    // REGLA 1: RELATIVE MOMENTUM
+    // Si ambos risky assets tienen momentum positivo o Elegir el mejor
+    If momUS > 0 and momIntl > 0 then begin
+        
+        If momUS >= momIntl then begin
+            selectedIdx = idxUS;
+            selectedName = "US Stocks (IVV)";
+        end
+        else begin
+            selectedIdx = idxIntl;
+            selectedName = "Intl Stocks (VEU)";
+        end;
+        
+        If VerboseMode then begin
+            print("DECISION: RELATIVE MOMENTUM");
+            print("  Both risky assets positive");
+            print("  Selected: ", selectedName);
+            print("  Momentum: ", IFF(selectedIdx = idxUS, momUS, momIntl):0:2, "%");
+        end;
+    end
+    
+    // REGLA 2: ABSOLUTE MOMENTUM
+    // Si algon risky asset tiene momentum negativo o Bonds
+    else begin
+        
+        selectedIdx = idxBonds;
+        selectedName = "Bonds (BND)";
+        
+        If VerboseMode then begin
+            print("DECISION: ABSOLUTE MOMENTUM");
+            print("  At least one risky asset negative");
+            print("  US: ", momUS:0:2, "% | Intl: ", momIntl:0:2, "%");
+            print("  Selected: ", selectedName);
+        end;
+        
+        // REGLA 3 (OPCIONAL): FALLBACK TO CASH
+        // Si Bonds tambion tiene momentum negativo o Cash
+        If UseFallbackToCash and foundCash and momBonds <= 0 then begin
+            selectedIdx = idxCash;
+            selectedName = "Cash (BIL)";
+            
+            If VerboseMode then begin
+                print("  WARNING: Bonds also negative (", momBonds:0:2, "%)");
+                print("  Fallback to Cash: ", selectedName);
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 3: CERRAR POSICIONES QUE NO SON LA SELECCIONADA
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        If pmms_strategy_marketposition(idx) <> 0 then begin
+            // Cerrar si NO es el asset seleccionado
+            If idx <> selectedIdx then begin
+                pmms_strategy_close_position(idx);
+                
+                If VerboseMode then
+                    print("Closing: ", pmms_strategy_symbol(idx));
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 4: ABRIR/MANTENER 100% EN ACTIVO SELECCIONADO
+    // ================================================
+    
+    If selectedIdx >= 0 then begin
+        
+        // Calcular contratos para 100% del equity
+        pmms_strategy_set_entry_contracts(selectedIdx, 
+            IntPortion(Portfolio_Equity * 1.0 / Close)
+        );
+        
+        // Permitir entrada
+        pmms_strategy_allow_long_entries(selectedIdx);
+        
+        If VerboseMode then begin
+            print("----------------------------------------");
+            print("ALLOCATION:");
+            print("  Asset: ", pmms_strategy_symbol(selectedIdx));
+            print("  Weight: 100%");
+            print("  Portfolio Equity: $", Portfolio_Equity:0:2);
+            print("  Price: $", Close:0:2);
+            print("  Contracts: ", IntPortion(Portfolio_Equity * 1.0 / Close):0:0);
+            print("========================================");
+        end;
+    end
+    else begin
+        If VerboseMode then
+            print("ERROR: No asset selected!");
+    end;
+    
+end;

@@ -1,0 +1,249 @@
+﻿////////////////////////////////////////////////
+// PMM SIGNAL: GTAA_Portfolio_MM
+// Global Tactical Asset Allocation (Faber 2007)
+// Asignaciones fijas + Filtro SMA
+////////////////////////////////////////////////
+
+Inputs:
+    LookbackPeriod(10),         // SMA lookback (meses)
+    RebalanceFrequency(0),      // 0=Monthly, 1=Quarterly, 2=Annually
+    VerboseMode(False);
+
+Vars:
+    portfolioStrategies(0),
+    idx(0),
+    
+    // Variables de colculo
+    symbol(""),
+    closePrice(0),
+    smaValue(0),
+    aboveSMA(False),
+    targetAllocation(0),
+    actualAllocation(0),
+    
+    // Suma de asignaciones
+    totalAllocated(0),
+    cashAllocation(0),
+    
+    // Tracking de sombolos especiales
+    cashSymbolIdx(-1),
+    
+    // Rebalanceo
+    isRebalanceDay(False),
+    currentMonth(0);
+
+// Tabla de asignaciones fijas por sombolo
+// Formato: Symbol -> Allocation %
+Vars: 
+    allocationMap(MapSN.New);
+
+// Restricciones
+once if 1 <> getappinfo(aiisportfoliomode) then
+    raiseruntimeerror("GTAA Portfolio MM can be applied for MCPortfolio application only.");
+
+once if pmms_strategies_count() > 10000 then
+    raiseruntimeerror("GTAA Portfolio MM: too many instruments");
+
+once begin
+    portfolioStrategies = pmms_strategies_count();
+    
+    // Definir asignaciones fijas (ajustar segon tu universo)
+    Value1 = MapSN.Put(allocationMap, "IVE",   5.0);   // Large Cap Value
+    Value1 = MapSN.Put(allocationMap, "IVV",   5.0);   // Large Cap
+    Value1 = MapSN.Put(allocationMap, "IJS",   5.0);   // Small Cap Value
+    Value1 = MapSN.Put(allocationMap, "IJR",   5.0);   // Small Cap
+    Value1 = MapSN.Put(allocationMap, "EFA",  10.0);   // Intl Developed
+    Value1 = MapSN.Put(allocationMap, "EEM",  10.0);   // Emerging Markets
+    Value1 = MapSN.Put(allocationMap, "IEF",   5.0);   // Int-term Treasuries
+    Value1 = MapSN.Put(allocationMap, "IGOV",  5.0);   // Intl Treasuries
+    Value1 = MapSN.Put(allocationMap, "TLT",   5.0);   // Long-term Treasuries
+    Value1 = MapSN.Put(allocationMap, "LQD",   5.0);   // Corporate Bonds
+    Value1 = MapSN.Put(allocationMap, "DBC",  10.0);   // Commodities
+    Value1 = MapSN.Put(allocationMap, "GLD",  10.0);   // Gold
+    Value1 = MapSN.Put(allocationMap, "IYR",  20.0);   // Real Estate
+    Value1 = MapSN.Put(allocationMap, "SHY",   0.0);   // Cash (special: residual)
+end;
+
+// ================================================
+// DETECTAR DoA DE REBALANCEO
+// ================================================
+
+currentMonth = Month(date);
+isRebalanceDay = False;
+
+If RebalanceFrequency = 0 then begin
+    // Mensual: Ultima barra del mes
+    If LastTradingDayOfMonth then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 1 then begin
+    // Trimestral
+    If LastTradingDayOfMonth AND (currentMonth = 3 OR currentMonth = 6 OR currentMonth = 9 OR currentMonth = 12) then
+        isRebalanceDay = True;
+end
+else If RebalanceFrequency = 2 then begin
+    // Anual
+    If LastTradingDayOfMonth AND currentMonth = 12 then
+        isRebalanceDay = True;
+end;
+
+// Denegar todas las entradas inicialmente
+pmms_strategies_deny_entries_all();
+
+// ================================================
+// PROCESAMIENTO EN DoA DE REBALANCEO
+// ================================================
+
+If isRebalanceDay then begin
+    
+    If VerboseMode then begin
+        print("========================================");
+        print("GTAA REBALANCE: ", Date:0:0);
+        print("SMA Lookback: ", LookbackPeriod:0:0, " periods");
+        print("========================================");
+    end;
+    
+    // ================================================
+    // PASO 1: CALCULAR ASIGNACIONES ACTIVAS
+    // ================================================
+    
+    totalAllocated = 0;
+    cashSymbolIdx = -1;
+    
+    // Array para marcar cuales assets deben tener posicion
+    Array: shouldHavePosition[10000](False);
+    
+    // IMPORTANTE: Reinicializar array a False
+    For idx = 0 to portfolioStrategies - 1 begin
+        shouldHavePosition[idx] = False;
+    end;
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        symbol = pmms_strategy_symbol(idx);
+        
+        // Obtener asignacion objetivo del mapa
+        If MapSN.Exists(allocationMap, symbol) then
+            targetAllocation = MapSN.Get(allocationMap, symbol)
+        else
+            targetAllocation = 0;  // Sombolo no en tabla
+        
+        // Identificar sombolo de "cash"
+        If symbol = "SHY" then begin
+            cashSymbolIdx = idx;
+            // Cash se calcula despuos como residual
+            targetAllocation = 0;
+        end;
+        
+        // Solo procesar sombolos con asignacion definida (no cash)
+        If targetAllocation > 0 then begin
+            
+            // Obtener datos del sombolo
+            closePrice = pmms_get_strategy_named_num(idx, "Close");
+            smaValue = pmms_get_strategy_named_num(idx, "SMA");
+            
+            // Aplicar filtro de tendencia
+            aboveSMA = closePrice > smaValue;
+            
+            If aboveSMA then
+                actualAllocation = targetAllocation
+            else
+                actualAllocation = 0;
+            
+            totalAllocated = totalAllocated + actualAllocation;
+            
+            // Marcar si debe tener posicion
+            If actualAllocation > 0 then
+                shouldHavePosition[idx] = True;
+        end;
+    end;
+    
+    // Marcar cash si sera necesario
+    If cashSymbolIdx >= 0 and (100 - totalAllocated) > 0 then
+        shouldHavePosition[cashSymbolIdx] = True;
+    
+    // ================================================
+    // PASO 2: CERRAR POSICIONES QUE NO DEBEN ESTAR
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        If pmms_strategy_marketposition(idx) <> 0 then begin
+            If shouldHavePosition[idx] = False then begin
+                pmms_strategy_close_position(idx);
+                
+                If VerboseMode then
+                    print("Closing: ", pmms_strategy_symbol(idx));
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 3: ABRIR/MANTENER POSICIONES ACTIVAS
+    // ================================================
+    
+    For idx = 0 to portfolioStrategies - 1 begin
+        symbol = pmms_strategy_symbol(idx);
+        
+        If MapSN.Exists(allocationMap, symbol) then
+            targetAllocation = MapSN.Get(allocationMap, symbol)
+        else
+            targetAllocation = 0;
+        
+        If symbol = "SHY" then
+            targetAllocation = 0;
+        
+        If targetAllocation > 0 then begin
+            closePrice = pmms_get_strategy_named_num(idx, "Close");
+            smaValue = pmms_get_strategy_named_num(idx, "SMA");
+            aboveSMA = closePrice > smaValue;
+            
+            If aboveSMA then
+                actualAllocation = targetAllocation
+            else
+                actualAllocation = 0;
+            
+            If actualAllocation > 0 then begin
+                pmms_strategy_set_entry_contracts(idx, 
+                    IntPortion(Portfolio_Equity * actualAllocation / 100 / closePrice)
+                );
+                pmms_strategy_allow_long_entries(idx);
+                
+                If VerboseMode then
+                    print(symbol, ": ", actualAllocation:0:1, "% (Close: ", 
+                          closePrice:0:2, " vs SMA: ", smaValue:0:2, ")");
+            end
+            else begin
+                If VerboseMode then
+                    print(symbol, ": 0.0% (below SMA)");
+            end;
+        end;
+    end;
+    
+    // ================================================
+    // PASO 4: ASIGNAR "CASH" (RESIDUAL)
+    // ================================================
+    
+    cashAllocation = 100 - totalAllocated;
+    
+    If cashSymbolIdx >= 0 and cashAllocation > 0 then begin
+        closePrice = pmms_get_strategy_named_num(cashSymbolIdx, "Close");
+        
+        pmms_strategy_set_entry_contracts(cashSymbolIdx, 
+            IntPortion(Portfolio_Equity * cashAllocation / 100 / closePrice)
+        );
+        pmms_strategy_allow_long_entries(cashSymbolIdx);
+        
+        If VerboseMode then
+            print("SHY (Cash): ", cashAllocation:0:1, "%");
+    end;
+    
+    // ================================================
+    // PASO 4: RESUMEN
+    // ================================================
+    
+    If VerboseMode then begin
+        print("----------------------------------------");
+        print("Total Allocated (Active): ", totalAllocated:0:1, "%");
+        print("Cash Allocation (SHY): ", cashAllocation:0:1, "%");
+        print("========================================");
+    end;
+end;
