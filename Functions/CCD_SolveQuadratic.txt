@@ -1,0 +1,89 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: CCD_SolveQuadratic
+// Resuelve ecuacion cuadrotica axo + bx + c = 0
+// Usado por el algoritmo CCD para optimizacion de pesos
+// Retorna: Raoz positiva (o 0 si no hay raoz positiva)
+////////////////////////////////////////////////
+
+Inputs:
+    ax(NumericSimple),           // Coeficiente cuadrotico
+    bx(NumericSimple),           // Coeficiente lineal
+    cx(NumericSimple);           // Tormino constante
+
+Vars:
+    discriminant(0),
+    sqrtDisc(0),
+    root1(0),
+    root2(0),
+    result(0),
+    b_half(0),
+    sign_b_half(0),
+    q(0);
+
+// Validar coeficiente a
+If ax = 0 then begin
+    // No es ecuacion cuadrotica, es lineal: bx + c = 0
+    If bx <> 0 then
+        result = -cx / bx
+    else
+        result = 0;
+end
+else begin
+    // Calcular discriminante
+    discriminant = bx * bx - 4 * ax * cx;
+    
+    If discriminant < 0 then begin
+        // No hay raoces reales
+        result = 0;
+    end
+    else If discriminant = 0 then begin
+        // Una raoz doble
+        result = -bx / (2 * ax);
+        
+        // Retornar 0 si es negativa
+        If result < 0 then
+            result = 0;
+    end
+    else begin
+        // Dos raoces reales
+        // Usar formula numerically stable para evitar cancelacion
+        // CORRECCIoN: Para CCD siempre c=0, entonces discriminant = bo
+        // AmiBroker usa: q = -(b/2 + sign(b/2) * |b/2|)
+        b_half = bx / 2;
+        
+        // Signo de b_half
+        If b_half >= 0 then
+            sign_b_half = 1
+        else
+            sign_b_half = -1;
+        
+        // CORRECCIoN: Usar abs(b_half) no sqrt(discriminant)
+        // Para match con AmiBroker
+        q = -(b_half + sign_b_half * AbsValue(b_half));
+        
+        // Calcular raoz
+        root1 = q / ax;
+        
+        // Para c=0, root2 = c/q = 0 (redundante)
+        If q <> 0 then
+            root2 = cx / q
+        else
+            root2 = 0;
+        
+        // Seleccionar la raoz positiva
+        If root1 > 0 and root2 > 0 then begin
+            result = MaxList(root1, root2);
+        end
+        else If root1 > 0 then begin
+            result = root1;
+        end
+        else If root2 > 0 then begin
+            result = root2;
+        end
+        else begin
+            result = 0;
+        end;
+    end;
+end;
+
+CCD_SolveQuadratic = result;

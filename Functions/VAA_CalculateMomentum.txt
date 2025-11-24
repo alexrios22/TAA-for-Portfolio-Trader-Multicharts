@@ -1,0 +1,66 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: VAA_CalculateMomentum
+// Calcula el momentum segon el motodo seleccionado
+// Retorna: Valor de momentum
+////////////////////////////////////////////////
+
+Inputs:
+    MomStyle(NumericSimple),    // 0=13612W, 1=13612, 2=SMA12, 3=RET12
+    CurrentClose(NumericSimple),
+    Close1MonthAgo(NumericSimple),
+    Close3MonthsAgo(NumericSimple),
+    Close6MonthsAgo(NumericSimple),
+    Close12MonthsAgo(NumericSimple),
+    SMA13(NumericSimple);       // Media de 13 meses (12+1)
+
+Vars:
+    ret1m(0),
+    ret3m(0),
+    ret6m(0),
+    ret12m(0),
+    momentum(0);
+
+// Calcular returns individuales
+If Close1MonthAgo > 0 then
+    ret1m = (CurrentClose / Close1MonthAgo - 1)
+else
+    ret1m = 0;
+
+If Close3MonthsAgo > 0 then
+    ret3m = (CurrentClose / Close3MonthsAgo - 1)
+else
+    ret3m = 0;
+
+If Close6MonthsAgo > 0 then
+    ret6m = (CurrentClose / Close6MonthsAgo - 1)
+else
+    ret6m = 0;
+
+If Close12MonthsAgo > 0 then
+    ret12m = (CurrentClose / Close12MonthsAgo - 1)
+else
+    ret12m = 0;
+
+// Calcular momentum segon estilo
+If MomStyle = 0 then begin
+    // 13612W: Promedio ponderado (12, 4, 2, 1)
+    momentum = 100 * ((12 * ret1m + 4 * ret3m + 2 * ret6m + ret12m) / 4);
+end
+else If MomStyle = 1 then begin
+    // 13612: Promedio simple
+    momentum = 100 * ((ret1m + ret3m + ret6m + ret12m) / 4);
+end
+else If MomStyle = 2 then begin
+    // SMA12: Precio vs media movil
+    If SMA13 > 0 then
+        momentum = 100 * (CurrentClose / SMA13 - 1)
+    else
+        momentum = 0;
+end
+else If MomStyle = 3 then begin
+    // RET12: Return simple de 12 meses
+    momentum = 100 * ret12m;
+end;
+
+VAA_CalculateMomentum = momentum;
+

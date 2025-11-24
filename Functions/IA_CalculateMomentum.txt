@@ -1,0 +1,57 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: IA_CalculateMomentum
+// Calcula el indicador Inercia Alcista (IA)
+// IA combina ROC ponderado ajustado por volatilidad normalizada
+// Retorna: Valor de Inercia Alcista
+////////////////////////////////////////////////
+
+Inputs:
+    Source(NumericSeries),      // Serie de precios (tipicamente Close)
+    Len1(NumericSimple),        // Longitud para ROC1 (default: 8)
+    Len2(NumericSimple),        // Longitud para ROC2 (default: 10)
+    Len3(NumericSimple);        // Longitud para ATR y SMA (default: 14)
+
+Vars:
+    roc1(0),
+    roc2(0),
+    vol(0),
+    ma(0),
+    numerador(0),
+    denominador(0),
+    ia(0);
+
+// Calcular ROC (Rate of Change)
+// ROC = (Price / Price[N] - 1) * 100
+If Source[Len1] > 0 then
+    roc1 = (Source / Source[Len1] - 1) * 100
+else
+    roc1 = 0;
+
+If Source[Len2] > 0 then
+    roc2 = (Source / Source[Len2] - 1) * 100
+else
+    roc2 = 0;
+
+// Calcular volatilidad (ATR)
+vol = AvgTrueRange(Len3);
+
+// Calcular media movil
+ma = Average(Source, Len3);
+
+// Calcular numerador: 0.4*roc1 + 0.2*roc2
+numerador = 0.4 * roc1 + 0.2 * roc2;
+
+// Calcular denominador: vol/ma
+If ma > 0 then
+    denominador = vol / ma
+else
+    denominador = 0.0001; // Evitar division por cero
+
+// Calcular Inercia Alcista
+// IA = numerador / (0.4 * denominador)
+If denominador > 0 then
+    ia = numerador / (0.4 * denominador)
+else
+    ia = 0;
+
+IA_CalculateMomentum = ia;

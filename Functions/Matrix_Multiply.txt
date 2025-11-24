@@ -1,0 +1,67 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: Matrix_Multiply
+// Multiplica dos matrices (A o B)
+// Retorna: Nueva matriz resultado
+////////////////////////////////////////////////
+
+Inputs:
+    MatrixA(NumericSimple),     // ID de ListC (matriz A: mon)
+    MatrixB(NumericSimple);     // ID de ListC (matriz B: nop)
+
+Vars:
+    Result(0),
+    RowsA(0),
+    ColsA(0),
+    RowsB(0),
+    ColsB(0),
+    idx(0),
+    jdx(0),
+    kdx(0),
+    RowA(0),
+    RowB(0),
+    RowResult(0),
+    Sum(0),
+    ValueA(0),
+    ValueB(0);
+
+RowsA = ListC.Count(MatrixA);
+RowsB = ListC.Count(MatrixB);
+
+// Verificar dimensiones compatibles
+RowA = ListC.Get(MatrixA, 1);
+ColsA = ListN.Count(RowA);
+RowB = ListC.Get(MatrixB, 1);
+ColsB = ListN.Count(RowB);
+
+If ColsA <> RowsB then begin
+    print("ERROR: Dimensiones incompatibles para multiplicacion");
+    Matrix_Multiply = 0;
+end
+else begin
+    // Crear matriz resultado (RowsA o ColsB)
+    Result = ListC.New;
+    
+    For idx = 1 to RowsA begin
+        RowA = ListC.Get(MatrixA, idx);
+        RowResult = ListN.New;
+        
+        For jdx = 1 to ColsB begin
+            Sum = 0;
+            
+            // Producto punto de fila i de A con columna j de B
+            For kdx = 1 to ColsA begin
+                ValueA = ListN.Get(RowA, kdx);
+                RowB = ListC.Get(MatrixB, kdx);
+                ValueB = ListN.Get(RowB, jdx);
+                Sum = Sum + (ValueA * ValueB);
+            end;
+            
+            Value1 = ListN.PushBack(RowResult, Sum);
+        end;
+        
+        Value1 = ListC.PushBack(Result, RowResult);
+    end;
+    
+    Matrix_Multiply = Result;
+end;
+

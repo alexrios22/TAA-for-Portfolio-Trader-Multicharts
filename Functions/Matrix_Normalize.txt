@@ -1,0 +1,27 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: Matrix_Normalize
+// Normaliza un vector o matriz dividiendo por la suma de sus elementos
+// util para normalizar pesos de portfolio
+// Retorna: Nueva matriz/vector normalizado
+////////////////////////////////////////////////
+
+Inputs:
+    Matrix(NumericSimple);      // ID de ListC (matriz) o ListN (vector)
+
+Vars:
+    Result(0),
+    Sum(0);
+
+// Calcular suma de todos los elementos
+Sum = Matrix_Sum(Matrix);
+
+// Verificar suma no cero
+If Sum = 0 then begin
+    print("ERROR: No se puede normalizar, suma = 0");
+    Matrix_Normalize = 0;
+end
+else begin
+    // Dividir por la suma para normalizar
+    Result = Matrix_ScalarDivide(Matrix, Sum);
+    Matrix_Normalize = Result;
+end;

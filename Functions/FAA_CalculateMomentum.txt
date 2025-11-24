@@ -1,0 +1,25 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: FAA_CalculateMomentum
+// Calcula el momentum
+// Retorna: Valor de momentum
+////////////////////////////////////////////////
+
+Inputs:
+    CurrentClose(NumericSimple),
+    CloseNMonthAgo(NumericSimple);
+
+Vars:
+    retNm(0),
+    momentum(0);
+
+// Calcular returns 
+If CloseNMonthAgo > 0 then
+    retNm = (CurrentClose / CloseNMonthAgo - 1)
+else
+    retNm = 0;
+
+
+// Calcular momentum 
+momentum = 100 * retNm;
+
+FAA_CalculateMomentum = momentum;

@@ -1,0 +1,47 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: AlmostEqual
+// Compara dos numeros con tolerancia para errores de punto flotante
+// Basado en: https://www.amibroker.com/guide/afl/almostequal.html
+// Retorna: True si son casi iguales, False si no
+////////////////////////////////////////////////
+
+Inputs:
+    Value1(NumericSimple),      // Primer valor
+    Value2(NumericSimple),      // Segundo valor
+    Ulps(NumericSimple);        // Unidades en ultima posicion (tolerancia)
+
+Vars:
+    diff(0),
+    epsilon(0),
+    maxValue(0),
+    result(False);
+
+// Calcular diferencia absoluta
+diff = AbsValue(Value1 - Value2);
+
+// Si los valores son exactamente iguales
+If diff = 0 then begin
+    result = True;
+end
+else begin
+    // Calcular epsilon basado en ULPs
+    // Para simplificar, usamos un epsilon relativo
+    maxValue = MaxList(AbsValue(Value1), AbsValue(Value2));
+    
+    // Si ambos valores son cercanos a cero, usar epsilon absoluto
+    If maxValue < 0.00001 then begin
+        epsilon = 0.00001 * Ulps;
+    end
+    else begin
+        // Epsilon relativo: basado en la magnitud de los valores
+        epsilon = maxValue * 0.00001 * Ulps;
+    end;
+    
+    // Comparar diferencia con epsilon
+    If diff <= epsilon then
+        result = True
+    else
+        result = False;
+end;
+
+AlmostEqual = result;

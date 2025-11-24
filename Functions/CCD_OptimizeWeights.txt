@@ -1,0 +1,272 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: CCD_OptimizeWeights
+// Algoritmo Cyclical Coordinate Descent para optimizacion de pesos
+// Minimiza varianza del portfolio sujeto a restricciones
+// Retorna: Vector de pesos optimos (ListN)
+////////////////////////////////////////////////
+
+Inputs:
+    SIGMA(NumericSimple),       // ID de matriz de covarianza (ListC)
+    MaxIterations(NumericSimple); // Moximo nomero de iteraciones
+
+Vars:
+    nbAssets(0),
+    X(0),                       // Vector de pesos
+    SIGMA_X(0),                 // Producto SIGMA @ X
+    SIGMA_X_2(0),               // Producto temporal
+    var_x(0),                   // Varianza del portfolio (x' @ SIGMA @ x)
+    var_x_2(0),                 // Varianza temporal
+    obj(0),                     // Funcion objetivo
+    obj_star(0),                // Funcion objetivo optima
+    obj_star_2(0),              // Funcion objetivo temporal caso 2
+    
+    iter(0),
+    converged(False),
+    
+    idx(0),
+    jdx(0),
+    kdx(0),
+    
+    // Coeficientes ecuacion cuadrotica
+    ax(0),
+    bx(0),
+    cc(0),
+    
+    // Raoces
+    xi_star_1(0),
+    xi_star_2(0),
+    
+    // Valores temporales
+    rowSIGMA(0),
+    sigma_ii(0),
+    sigma_x_i(0),
+    x_i(0),
+    sigma_ij(0),
+    x_j(0),
+    sigma_jk(0),
+    x_k(0),
+    sigma_x_j(0),
+
+    
+    // Resultado
+    Result(0),
+    tempRow(0),
+    tempValue(0);
+
+// Obtener nomero de assets
+nbAssets = ListC.Count(SIGMA);
+
+If nbAssets = 0 then begin
+    print("ERROR CCD: Matriz SIGMA vacoa");
+    CCD_OptimizeWeights = 0;
+end
+else begin
+    
+    // ================================================
+    // INICIALIZACIoN: Punto inicial equal weight
+    // ================================================
+    
+    X = ListN.New;
+    For idx = 1 to nbAssets begin
+        Value1 = ListN.PushBack(X, 100.0 / nbAssets);
+    end;
+    
+    // ================================================
+    // CoLCULOS PREPARATORIOS
+    // ================================================
+    
+    // SIGMA_X = SIGMA @ X (producto matriz-vector)
+    SIGMA_X = ListN.New;
+    
+    For idx = 1 to nbAssets begin
+        rowSIGMA = ListC.Get(SIGMA, idx);
+        tempValue = 0;
+        
+        For jdx = 1 to nbAssets begin
+            sigma_ij = ListN.Get(rowSIGMA, jdx);
+            x_j = ListN.Get(X, jdx);
+            tempValue = tempValue + (sigma_ij * x_j);
+        end;
+        
+        Value1 = ListN.PushBack(SIGMA_X, tempValue);
+    end;
+    
+    // var_x = X' @ SIGMA_X (producto punto)
+    var_x = 0;
+    For idx = 1 to nbAssets begin
+        x_i = ListN.Get(X, idx);
+        sigma_x_i = ListN.Get(SIGMA_X, idx);
+        var_x = var_x + (x_i * sigma_x_i);
+    end;
+    
+    // obj = 0.5 * var_x - sum(X)
+    obj = 0.5 * var_x - Matrix_Sum(X);
+    
+    // ================================================
+    // LOOP PRINCIPAL CCD
+    // ================================================
+    
+    iter = 1;
+    converged = False;
+    
+    while iter <= MaxIterations and not converged begin
+        
+        // Asumir convergencia por defecto
+        converged = True;
+        
+        // Iterar sobre cada asset
+        For idx = 1 to nbAssets begin
+            
+            // ================================================
+            // COEFICIENTES DE ECUACIoN CUADRoTICA
+            // ================================================
+            
+            rowSIGMA = ListC.Get(SIGMA, idx);
+            sigma_ii = ListN.Get(rowSIGMA, idx);  // SIGMA[i][i]
+            x_i = ListN.Get(X, idx);
+            sigma_x_i = ListN.Get(SIGMA_X, idx);  // (SIGMA*X)[i]
+            
+            // a = sigma_ii (siempre > 0)
+            ax = sigma_ii;
+            
+            // b = (SIGMA*X)_i - x_i * sigma_ii - 1
+            bx = sigma_x_i - (x_i * sigma_ii) - 1;
+            
+            // c = 0 (para CCD standard)
+            cc = 0;
+            
+            // ================================================
+            // CASO #1: x_i* = 0
+            // ================================================
+            
+            xi_star_1 = 0;
+            
+            // Actualizar X temporalmente
+            Value1 = ListN.Put(X, idx, xi_star_1);
+            
+            // Recalcular SIGMA_X
+            Value1 = ListN.Release(SIGMA_X);
+            SIGMA_X = ListN.New;
+            
+            For jdx = 1 to nbAssets begin
+                tempRow = ListC.Get(SIGMA, jdx);
+                tempValue = 0;
+                
+                For kdx = 1 to nbAssets begin
+                    sigma_jk = ListN.Get(tempRow, kdx);
+                    x_k = ListN.Get(X, kdx);
+                    tempValue = tempValue + (sigma_jk * x_k);
+                end;
+                
+                Value1 = ListN.PushBack(SIGMA_X, tempValue);
+            end;
+            
+            // Recalcular var_x
+            var_x = 0;
+            For jdx = 1 to nbAssets begin
+                x_j = ListN.Get(X, jdx);
+                sigma_x_j = ListN.Get(SIGMA_X, jdx);
+                var_x = var_x + (x_j * sigma_x_j);
+            end;
+            
+            // obj_star = 0.5 * var_x - sum(X)
+            obj_star = 0.5 * var_x - Matrix_Sum(X);
+            
+            // ================================================
+            // CASO #2: x_i* = raoz positiva
+            // ================================================
+            
+            xi_star_2 = CCD_SolveQuadratic(ax, bx, cc);
+            
+            If xi_star_2 > 0 then begin
+                
+                // Actualizar X con caso 2
+                Value1 = ListN.Put(X, idx, xi_star_2);
+                
+                // Recalcular SIGMA_X para caso 2
+                // Solo liberar si ya existe (no es 0)
+                If SIGMA_X_2 <> 0 then
+                    Value1 = ListN.Release(SIGMA_X_2);
+                SIGMA_X_2 = ListN.New;
+                
+                For jdx = 1 to nbAssets begin
+                    tempRow = ListC.Get(SIGMA, jdx);
+                    tempValue = 0;
+                    
+                    For kdx = 1 to nbAssets begin
+                        sigma_jk = ListN.Get(tempRow, kdx);
+                        x_k = ListN.Get(X, kdx);
+                        tempValue = tempValue + (sigma_jk * x_k);
+                    end;
+                    
+                    Value1 = ListN.PushBack(SIGMA_X_2, tempValue);
+                end;
+                
+                // Recalcular var_x para caso 2
+                var_x_2 = 0;
+                For jdx = 1 to nbAssets begin
+                    x_j = ListN.Get(X, jdx);
+                    sigma_x_j = ListN.Get(SIGMA_X_2, jdx);
+                    var_x_2 = var_x_2 + (x_j * sigma_x_j);
+                end;
+                
+                // obj_star_2 = 0.5 * var_x_2 - sum(X)
+                obj_star_2 = 0.5 * var_x_2 - Matrix_Sum(X);
+                
+                // ================================================
+                // SELECCIoN ENTRE CASO 1 Y CASO 2
+                // ================================================
+                
+                If obj_star_2 < obj_star then begin
+                    // Caso 2 es mejor, ya esto actualizado
+                    Value1 = ListN.Release(SIGMA_X);
+                    SIGMA_X = SIGMA_X_2;
+                    SIGMA_X_2 = 0;  // Resetear para evitar double-release
+                    var_x = var_x_2;
+                    obj_star = obj_star_2;
+                end
+                else begin
+                    // Caso 1 es mejor, restaurar
+                    Value1 = ListN.Put(X, idx, xi_star_1);
+                    // SIGMA_X ya esto correcto para caso 1
+                    // Liberar SIGMA_X_2 que no se usaro
+                    If SIGMA_X_2 <> 0 then begin
+                        Value1 = ListN.Release(SIGMA_X_2);
+                        SIGMA_X_2 = 0;
+                    end;
+                end;
+                
+            end
+            else begin
+                // Solo caso 1 es volido
+                // Ya esto actualizado
+            end;
+            
+        end; // For idx (iterar sobre assets)
+        
+        // ================================================
+        // VERIFICAR CONVERGENCIA
+        // ================================================
+        
+        If not AlmostEqual(obj_star, obj, 5) then begin
+            converged = False;
+            obj = obj_star;
+        end;
+        
+        // Incrementar contador
+        iter = iter + 1;
+        
+    end; // while loop
+    
+    // ================================================
+    // NORMALIZAR PESOS
+    // ================================================
+    
+    Result = Matrix_Normalize(X);
+    
+    // Liberar memoria
+    Value1 = ListN.Release(X);
+    Value1 = ListN.Release(SIGMA_X);
+    
+    CCD_OptimizeWeights = Result;
+end;

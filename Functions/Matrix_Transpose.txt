@@ -1,0 +1,45 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: Matrix_Transpose
+// Transpone una matriz
+// Retorna: Nueva matriz transpuesta
+////////////////////////////////////////////////
+
+Inputs:
+    Matrix(NumericSimple);      // ID de ListC (matriz)
+
+Vars:
+    Result(0),
+    Rows(0),
+    Cols(0),
+    idx(0),
+    jdx(0),
+    RowOrig(0),
+    RowResult(0),
+    Value(0);
+
+Rows = ListC.Count(Matrix);
+
+If Rows > 0 then begin
+    RowOrig = ListC.Get(Matrix, 1);
+    Cols = ListN.Count(RowOrig);
+    
+    // Crear matriz transpuesta (Cols o Rows)
+    Result = ListC.New;
+    
+    For jdx = 1 to Cols begin
+        RowResult = ListN.New;
+        
+        For idx = 1 to Rows begin
+            RowOrig = ListC.Get(Matrix, idx);
+            Value = ListN.Get(RowOrig, jdx);
+            Value1 = ListN.PushBack(RowResult, Value);
+        end;
+        
+        Value1 = ListC.PushBack(Result, RowResult);
+    end;
+    
+    Matrix_Transpose = Result;
+end
+else
+    Matrix_Transpose = 0;
+

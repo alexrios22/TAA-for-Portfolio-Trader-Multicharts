@@ -1,0 +1,32 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: IBS_CalculateIBS
+// Calcula Internal Bar Strength (IBS)
+// IBS = (Close - Low) / (High - Low)
+// Mide donde cerro el precio dentro del rango del dia
+// IBS bajo = oversold, IBS alto = overbought
+// Retorna: Valor IBS (0 a 1, o 2 si no hay rango)
+////////////////////////////////////////////////
+
+Inputs:
+    HighPrice(NumericSimple),
+    LowPrice(NumericSimple),
+    ClosePrice(NumericSimple);
+
+Vars:
+    range(0),
+    ibs(0);
+
+// Calcular rango del dia
+range = HighPrice - LowPrice;
+
+// Calcular IBS
+If range > 0 then begin
+    ibs = (ClosePrice - LowPrice) / range;
+end
+else begin
+    // Si no hay rango (High = Low), asignar valor alto
+    // para que no sea seleccionado (estrategia busca IBS bajo)
+    ibs = 2;
+end;
+
+IBS_CalculateIBS = ibs;

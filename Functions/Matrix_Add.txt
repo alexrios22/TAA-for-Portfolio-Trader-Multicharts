@@ -1,0 +1,66 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: Matrix_Add
+// Suma dos matrices
+// Retorna: Nueva matriz resultado
+////////////////////////////////////////////////
+
+Inputs:
+    MatrixA(NumericSimple),     // ID de ListC (matriz A)
+    MatrixB(NumericSimple);     // ID de ListC (matriz B)
+
+Vars:
+    Result(0),
+    RowsA(0),
+    RowsB(0),
+    ColsA(0),
+    ColsB(0),
+    idx(0),
+    jdx(0),
+    RowA(0),
+    RowB(0),
+    RowResult(0),
+    ValueA(0),
+    ValueB(0),
+    ValueSum(0);
+
+// Verificar dimensiones
+RowsA = ListC.Count(MatrixA);
+RowsB = ListC.Count(MatrixB);
+
+If RowsA <> RowsB then begin
+    print("ERROR: Matrices con diferentes filas");
+    Matrix_Add = 0;
+end
+else begin
+    // Crear matriz resultado
+    Result = ListC.New;
+    
+    For idx = 1 to RowsA begin
+        RowA = ListC.Get(MatrixA, idx);
+        RowB = ListC.Get(MatrixB, idx);
+        
+        ColsA = ListN.Count(RowA);
+        ColsB = ListN.Count(RowB);
+        
+        If ColsA <> ColsB then begin
+            print("ERROR: Matrices con diferentes columnas");
+            Matrix_Add = 0;
+            Break;
+        end;
+        
+        // Crear fila resultado
+        RowResult = ListN.New;
+        
+        For jdx = 1 to ColsA begin
+            ValueA = ListN.Get(RowA, jdx);
+            ValueB = ListN.Get(RowB, jdx);
+            ValueSum = ValueA + ValueB;
+            Value1 = ListN.PushBack(RowResult, ValueSum);
+        end;
+        
+        Value1 = ListC.PushBack(Result, RowResult);
+    end;
+    
+    Matrix_Add = Result;
+end;
+

@@ -1,0 +1,115 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: AAA_CalculateCorrelation_v3
+// CORRECCIoN FINAL: Match exacto con AmiBroker
+// Calcula correlacion de Pearson entre retornos SIMPLES de dos assets
+// Usa las listas compartidas creadas por AAA_Signal_Base_v3
+// Retorna: Coeficiente de correlacion (-1 a 1)
+////////////////////////////////////////////////
+
+Inputs:
+    Symbol1(StringSimple),      // Nombre del primer simbolo
+    Symbol2(StringSimple),      // Nombre del segundo simbolo
+    MinBars(NumericSimple);     // Minimo de barras requeridas
+
+Vars:
+    List1(0),
+    List2(0),
+    count1(0),
+    count2(0),
+    minCount(0),
+    idx(0),
+    
+    // Variables para calculo de correlacion
+    sumX(0),
+    sumY(0),
+    sumX2(0),
+    sumY2(0),
+    sumXY(0),
+    n(0),
+    
+    // Numerador y denominador de Pearson
+    numerator(0),
+    denomX(0),
+    denomY(0),
+    denominator(0),
+    
+    // Retorno simple actual de cada serie
+    returnX(0),
+    returnY(0),
+    
+    // Resultado
+    correlation(0);
+
+// Obtener listas compartidas de RETORNOS SIMPLES
+// AmiBroker: retX = (dataX / Ref(dataX, -1) - 1)
+List1 = ListN.Share("AAA_Returns_" + Symbol1);
+List2 = ListN.Share("AAA_Returns_" + Symbol2);
+
+// Verificar que ambas listas existan y tengan datos
+count1 = ListN.Count(List1);
+count2 = ListN.Count(List2);
+
+// Usar el minimo de ambas listas
+minCount = MinList(count1, count2);
+
+// Verificar que tengamos suficientes datos
+If minCount < MinBars then begin
+    AAA_CalculateCorrelation_v3 = 0;
+end
+else begin
+    
+    // CORRECCIoN CRiTICA: Usar exactamente MinBars elementos (como AmiBroker)
+    // No usar todos los datos disponibles
+    Vars: startIdx(0);
+    
+    // Reinicializar sumas
+    sumX = 0;
+    sumY = 0;
+    sumX2 = 0;
+    sumY2 = 0;
+    sumXY = 0;
+    n = MinBars;  // Usar exactamente MinBars, no minCount
+    
+    // Calcular indice inicial para tomar solo los ultimos MinBars elementos
+    startIdx = minCount - MinBars + 1;
+    
+    // Calcular sumas necesarias para Pearson
+    // Formula: r = [n*∑XY - ∑X*∑Y] / sqrt([n*∑X² - (∑X)²] * [n*∑Y² - (∑Y)²])
+    // IMPORTANTE: Iterar solo sobre los ultimos MinBars elementos
+    
+    For idx = startIdx to minCount begin
+        returnX = ListN.Get(List1, idx);
+        returnY = ListN.Get(List2, idx);
+        
+        sumX = sumX + returnX;
+        sumY = sumY + returnY;
+        sumX2 = sumX2 + (returnX * returnX);
+        sumY2 = sumY2 + (returnY * returnY);
+        sumXY = sumXY + (returnX * returnY);
+    end;
+    
+    // Calcular numerador: n*∑XY - ∑X*∑Y
+    numerator = (n * sumXY) - (sumX * sumY);
+    
+    // Calcular denominador: sqrt([n*∑X² - (∑X)²] * [n*∑Y² - (∑Y)²])
+    denomX = (n * sumX2) - (sumX * sumX);
+    denomY = (n * sumY2) - (sumY * sumY);
+    
+    // Verificar que no haya division por cero
+    If denomX > 0 and denomY > 0 then begin
+        denominator = SquareRoot(denomX * denomY);
+        
+        If denominator > 0 then begin
+            correlation = numerator / denominator;
+            
+            // Limitar entre -1 y 1 (por errores de redondeo)
+            correlation = MaxList(-1, MinList(1, correlation));
+        end
+        else
+            correlation = 0;
+    end
+    else
+        correlation = 0;
+    
+    AAA_CalculateCorrelation_v3 = correlation;
+end;

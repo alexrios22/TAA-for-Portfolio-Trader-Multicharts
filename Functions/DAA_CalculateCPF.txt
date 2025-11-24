@@ -1,0 +1,43 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: DAA_CalculateCPF
+// Calcula el Crash Protection Factor basado en universo protectivo
+// Retorna: BF (Bond Fraction en porcentaje 0-100)
+////////////////////////////////////////////////
+
+Inputs:
+    NumBadCanaries(NumericSimple),      // BP: # de canarios con momentum negativo
+    MinB1(NumericSimple),               // Umbral para BF=100%
+    MaxB0(NumericSimple),               // Umbral para BF=0%
+    NumStockPositions(NumericSimple);   // Top N stocks deseados
+
+Vars:
+    BF(0),
+    numerator(0),
+    denominator(0);
+
+// Calcular Bond Fraction segon formula DAA
+// BF = 100 * Min(1, floor(Top * BP / MinB1) / Top)
+
+If MinB1 > 0 and NumStockPositions > 0 then begin
+    numerator = IntPortion(NumStockPositions * NumBadCanaries / MinB1);
+    denominator = NumStockPositions;
+    
+    If denominator > 0 then
+        BF = 100 * MinList(1, numerator / denominator)
+    else
+        BF = 0;
+end
+else
+    BF = 0;
+
+// Casos especiales segon MaxB0 y MinB1
+If NumBadCanaries <= MaxB0 then
+    BF = 0
+else If NumBadCanaries >= MinB1 then
+    BF = 100;
+
+// Limitar entre 0-100%
+BF = MaxList(0, MinList(100, BF));
+
+DAA_CalculateCPF = BF;
+

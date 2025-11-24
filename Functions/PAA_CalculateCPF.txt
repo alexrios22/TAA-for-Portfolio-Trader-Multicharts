@@ -1,0 +1,41 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: PAA_CalculateCPF
+// Calcula el Crash Protection Factor segon nivel
+// Retorna: wCPF (porcentaje para bonds)
+////////////////////////////////////////////////
+
+Inputs:
+    CPFLevel(NumericSimple),        // -1=TopOnly, 0=Low, 1=Medium, 2=High
+    TotalStocks(NumericSimple),     // NoS: Total stocks en universo
+    PosMomentumStocks(NumericSimple), // Stocks con momentum > 0
+    NumStockPositions(NumericSimple); // PqS: Top N stocks deseados
+
+Vars:
+    wCPF(0),
+    pf(0),
+    denominator(0);
+
+// Determinar pf segon nivel de proteccion
+If CPFLevel = -1 then begin
+    // TopOnly (FAA style)
+    wCPF = MaxList(0, 100 * (NumStockPositions - PosMomentumStocks) / NumStockPositions);
+end
+else begin
+    // PAA styles (Low/Medium/High)
+    pf = CPFLevel; // 0, 1, or 2
+    
+    // Calcular denominador
+    denominator = TotalStocks - (pf * TotalStocks / 4);
+    
+    // Evitar division por cero
+    If denominator <= 0 then
+        denominator = 1;
+    
+    // Calcular wCPF
+    wCPF = 100 * MinList(1, (TotalStocks - PosMomentumStocks) / denominator);
+end;
+
+// Limitar entre 0-100%
+wCPF = MaxList(0, MinList(100, wCPF));
+
+PAA_CalculateCPF = wCPF;

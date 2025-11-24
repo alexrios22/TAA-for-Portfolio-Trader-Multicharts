@@ -1,0 +1,54 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: Matrix_Sum
+// Suma todos los elementos de una matriz o vector
+// Equivalente a MxSum en AmiBroker
+// Retorna: Suma total de todos los elementos
+////////////////////////////////////////////////
+
+Inputs:
+    Matrix(NumericSimple);      // ID de ListC (matriz) o ListN (vector)
+
+Vars:
+    Result(0),
+    Rows(0),
+    Cols(0),
+    idx(0),
+    jdx(0),
+    Row(0),
+    Value(0),
+    collectionType("");
+
+Result = 0;
+
+// Detectar tipo de coleccion
+collectionType = ELC.CollectionType(Matrix);
+
+If collectionType = "ListC" then begin
+    // Es una matriz (ListC)
+    Rows = ListC.Count(Matrix);
+    
+    For idx = 1 to Rows begin
+        Row = ListC.Get(Matrix, idx);
+        Cols = ListN.Count(Row);
+        
+        For jdx = 1 to Cols begin
+            Value = ListN.Get(Row, jdx);
+            Result = Result + Value;
+        end;
+    end;
+end
+else If collectionType = "ListN" then begin
+    // Es un vector (ListN)
+    Cols = ListN.Count(Matrix);
+    
+    For idx = 1 to Cols begin
+        Value = ListN.Get(Matrix, idx);
+        Result = Result + Value;
+    end;
+end
+else begin
+    print("ERROR Matrix_Sum: Tipo de coleccion no soportado: ", collectionType);
+    Result = 0;
+end;
+
+Matrix_Sum = Result;

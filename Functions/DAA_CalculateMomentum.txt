@@ -1,0 +1,46 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: DAA_CalculateMomentum
+// Calcula el momentum segon el motodo 13612W (idontico a VAA)
+// Retorna: Valor de momentum
+////////////////////////////////////////////////
+
+Inputs:
+    CurrentClose(NumericSimple),
+    Close1MonthAgo(NumericSimple),
+    Close3MonthsAgo(NumericSimple),
+    Close6MonthsAgo(NumericSimple),
+    Close12MonthsAgo(NumericSimple);
+
+Vars:
+    ret1m(0),
+    ret3m(0),
+    ret6m(0),
+    ret12m(0),
+    momentum(0);
+
+// Calcular returns individuales
+If Close1MonthAgo > 0 then
+    ret1m = (CurrentClose / Close1MonthAgo - 1)
+else
+    ret1m = 0;
+
+If Close3MonthsAgo > 0 then
+    ret3m = (CurrentClose / Close3MonthsAgo - 1)
+else
+    ret3m = 0;
+
+If Close6MonthsAgo > 0 then
+    ret6m = (CurrentClose / Close6MonthsAgo - 1)
+else
+    ret6m = 0;
+
+If Close12MonthsAgo > 0 then
+    ret12m = (CurrentClose / Close12MonthsAgo - 1)
+else
+    ret12m = 0;
+
+// Calcular momentum 13612W: Promedio ponderado (12, 4, 2, 1)
+momentum = 100 * ((12 * ret1m + 4 * ret3m + 2 * ret6m + ret12m) / 4);
+
+DAA_CalculateMomentum = momentum;
+

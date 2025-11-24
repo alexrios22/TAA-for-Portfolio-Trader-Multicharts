@@ -1,0 +1,32 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: Matrix_Identity
+// Crea matriz identidad de tamaoo non
+// Retorna: Nueva matriz identidad
+////////////////////////////////////////////////
+
+Inputs:
+    Size(NumericSimple);        // Tamaoo de la matriz
+
+Vars:
+    Result(0),
+    Row(0),
+    idx(0),
+    jdx(0);
+
+Result = ListC.New;
+
+For idx = 1 to Size begin
+    Row = ListN.New;
+    
+    For jdx = 1 to Size begin
+        If idx = jdx then
+            Value1 = ListN.PushBack(Row, 1)
+        else
+            Value1 = ListN.PushBack(Row, 0);
+    end;
+    
+    Value1 = ListC.PushBack(Result, Row);
+end;
+
+Matrix_Identity = Result;
+

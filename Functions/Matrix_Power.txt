@@ -1,0 +1,49 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: Matrix_Power
+// Eleva matriz a una potencia
+// Retorna: Nueva matriz resultado
+////////////////////////////////////////////////
+
+Inputs:
+    Matrix(NumericSimple),      // ID de ListC (matriz)
+    Power(NumericSimple);       // Exponente (entero positivo)
+
+Vars:
+    Result(0),
+    Temp(0),
+    idx(0),
+    Rows(0),
+    Cols(0),
+    Row1(0);
+
+Rows = ListC.Count(Matrix);
+Row1 = ListC.Get(Matrix, 1);
+Cols = ListN.Count(Row1);
+
+If Rows <> Cols then begin
+    print("ERROR: Solo matrices cuadradas pueden elevarse a potencia");
+    Matrix_Power = 0;
+end
+else If Power < 0 then begin
+    print("ERROR: Exponente debe ser no negativo");
+    Matrix_Power = 0;
+end
+else If Power = 0 then begin
+    // Retornar matriz identidad
+    Result = Matrix_Identity(Rows);
+    Matrix_Power = Result;
+end
+else begin
+    // Copiar matriz original
+    Result = Matrix;
+    
+    // Multiplicar Power-1 veces
+    For idx = 2 to Power begin
+        Temp = Matrix_Multiply(Result, Matrix);
+        Value1 = ListC.Release(Result);
+        Result = Temp;
+    end;
+    
+    Matrix_Power = Result;
+end;
+

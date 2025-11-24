@@ -1,0 +1,19 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: BAA_CalculateVolatility
+// Calcula la volatilidad anualizada
+// Retorna: Valor de volatilidad anualizada en %
+////////////////////////////////////////////////
+
+Inputs: 
+    PriceValue(NumericSeries), 
+    Len(NumericSimple);
+
+Vars:
+    ret1m(0),
+    DataType(1);
+
+// Calcular return mensual
+ret1m = (PriceValue / PriceValue[1] - 1);
+
+// Calcular volatilidad anualizada
+BAA_CalculateVolatility = StandardDevAnnual(ret1m, Len, DataType);

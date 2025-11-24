@@ -1,0 +1,106 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: GPM_CalculateLogReturnCorrelation_v2
+// Calcula correlacion de Pearson entre retornos logaritmicos de dos assets
+// Usa las listas compartidas creadas por GPM_Signal_Base_v2
+// CORRECCIoN: Usa retornos log en lugar de precios
+// Retorna: Coeficiente de correlacion (-1 a 1)
+////////////////////////////////////////////////
+
+Inputs:
+    Symbol1(StringSimple),      // Nombre del primer simbolo
+    Symbol2(StringSimple),      // Nombre del segundo simbolo
+    MinBars(NumericSimple);     // Minimo de barras requeridas
+
+Vars:
+    List1(0),
+    List2(0),
+    count1(0),
+    count2(0),
+    minCount(0),
+    idx(0),
+    
+    // Variables para calculo de correlacion
+    sumX(0),
+    sumY(0),
+    sumX2(0),
+    sumY2(0),
+    sumXY(0),
+    n(0),
+    
+    // Numerador y denominador de Pearson
+    numerator(0),
+    denomX(0),
+    denomY(0),
+    denominator(0),
+    
+    // Retorno log actual de cada serie
+    logReturnX(0),
+    logReturnY(0),
+    
+    // Resultado
+    correlation(0);
+
+// Obtener listas compartidas de RETORNOS LOG
+List1 = ListN.Share("GPM_LogReturns_" + Symbol1);
+List2 = ListN.Share("GPM_LogReturns_" + Symbol2);
+
+// Verificar que ambas listas existan y tengan datos
+count1 = ListN.Count(List1);
+count2 = ListN.Count(List2);
+
+// Usar el minimo de ambas listas
+minCount = MinList(count1, count2);
+
+// Verificar que tengamos suficientes datos
+If minCount < MinBars then begin
+    GPM_CalculateLogReturnCorrelation_v2 = 0;
+end
+else begin
+    
+    // Reinicializar sumas
+    sumX = 0;
+    sumY = 0;
+    sumX2 = 0;
+    sumY2 = 0;
+    sumXY = 0;
+    n = minCount;
+    
+    // Calcular sumas necesarias para Pearson
+    // Formula: r = [n*∑XY - ∑X*∑Y] / sqrt([n*∑X² - (∑X)²] * [n*∑Y² - (∑Y)²])
+    
+    For idx = 1 to minCount begin
+        logReturnX = ListN.Get(List1, idx);
+        logReturnY = ListN.Get(List2, idx);
+        
+        sumX = sumX + logReturnX;
+        sumY = sumY + logReturnY;
+        sumX2 = sumX2 + (logReturnX * logReturnX);
+        sumY2 = sumY2 + (logReturnY * logReturnY);
+        sumXY = sumXY + (logReturnX * logReturnY);
+    end;
+    
+    // Calcular numerador: n*∑XY - ∑X*∑Y
+    numerator = (n * sumXY) - (sumX * sumY);
+    
+    // Calcular denominador: sqrt([n*∑X² - (∑X)²] * [n*∑Y² - (∑Y)²])
+    denomX = (n * sumX2) - (sumX * sumX);
+    denomY = (n * sumY2) - (sumY * sumY);
+    
+    // Verificar que no haya division por cero
+    If denomX > 0 and denomY > 0 then begin
+        denominator = SquareRoot(denomX * denomY);
+        
+        If denominator > 0 then begin
+            correlation = numerator / denominator;
+            
+            // Limitar entre -1 y 1 (por errores de redondeo)
+            correlation = MaxList(-1, MinList(1, correlation));
+        end
+        else
+            correlation = 0;
+    end
+    else
+        correlation = 0;
+    
+    GPM_CalculateLogReturnCorrelation_v2 = correlation;
+end;

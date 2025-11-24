@@ -1,0 +1,108 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: FAA_CalculateCorrelation
+// Calcula correlacion de Pearson entre dos listas de RETORNOS LOGARoTMICOS
+// Usa las listas compartidas creadas por FAA_Signal_Base
+// Retorna: Coeficiente de correlacion (-1 a 1)
+////////////////////////////////////////////////
+
+Inputs:
+    Symbol1(StringSimple),      // Nombre del primer sombolo
+    Symbol2(StringSimple),      // Nombre del segundo sombolo
+    MinBars(NumericSimple);     // Monimo de barras requeridas
+
+Vars:
+    List1(0),
+    List2(0),
+    count1(0),
+    count2(0),
+    minCount(0),
+    idx(0),
+    
+    // Variables para colculo de correlacion
+    sumX(0),
+    sumY(0),
+    sumX2(0),
+    sumY2(0),
+    sumXY(0),
+    meanX(0),
+    meanY(0),
+    n(0),
+    
+    // Numerador y denominador de Pearson
+    numerator(0),
+    denomX(0),
+    denomY(0),
+    denominator(0),
+    
+    // Retorno logarotmico actual de cada serie
+    logReturnX(0),
+    logReturnY(0),
+    
+    // Resultado
+    correlation(0);
+
+// Obtener listas compartidas de RETORNOS LOGARoTMICOS
+List1 = ListN.Share("FAA_LogReturns_" + Symbol1);
+List2 = ListN.Share("FAA_LogReturns_" + Symbol2);
+
+// Verificar que ambas listas existan y tengan datos
+count1 = ListN.Count(List1);
+count2 = ListN.Count(List2);
+
+// Usar el monimo de ambas listas
+minCount = MinList(count1, count2);
+
+// Verificar que tengamos suficientes datos
+If minCount < MinBars then begin
+    FAA_CalculateCorrelation = 0;
+end
+else begin
+
+	// Reinicializar sumas
+	sumX = 0;
+	sumY = 0;
+	sumX2 = 0;
+	sumY2 = 0;
+	sumXY = 0;
+	n = minCount;
+
+	// Calcular sumas necesarias para Pearson
+	// Formula: r = [n*oXY - oX*oY] / sqrt([n*oXo - (oX)o] * [n*oYo - (oY)o])
+
+	For idx = 1 to minCount begin
+	    logReturnX = ListN.Get(List1, idx);
+	    logReturnY = ListN.Get(List2, idx);
+	    
+	    sumX = sumX + logReturnX;
+	    sumY = sumY + logReturnY;
+	    sumX2 = sumX2 + (logReturnX * logReturnX);
+	    sumY2 = sumY2 + (logReturnY * logReturnY);
+	    sumXY = sumXY + (logReturnX * logReturnY);
+	end;
+
+	// Calcular numerador: n*oXY - oX*oY
+	numerator = (n * sumXY) - (sumX * sumY);
+
+	// Calcular denominador: sqrt([n*oXo - (oX)o] * [n*oYo - (oY)o])
+	denomX = (n * sumX2) - (sumX * sumX);
+	denomY = (n * sumY2) - (sumY * sumY);
+
+	// Verificar que no haya division por cero
+	If denomX > 0 and denomY > 0 then begin
+	    denominator = SquareRoot(denomX * denomY);
+	    
+	    If denominator > 0 then begin
+	        correlation = numerator / denominator;
+	        
+	        // Limitar entre -1 y 1 (por errores de redondeo)
+	        correlation = MaxList(-1, MinList(1, correlation));
+	    end
+	    else
+	        correlation = 0;
+	end
+	else
+	    correlation = 0;
+
+	FAA_CalculateCorrelation = correlation;
+end;
+

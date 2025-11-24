@@ -1,0 +1,64 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: Matrix_Determinant
+// Calcula determinante de matriz 2o2 o 3o3
+// Retorna: Valor del determinante
+////////////////////////////////////////////////
+
+Inputs:
+    Matrix(NumericSimple);      // ID de ListC (matriz)
+
+Vars:
+    Rows(0),
+    Cols(0),
+    Row1(0),
+    Row2(0),
+    Row3(0),
+    a11(0), a12(0), a13(0),
+    a21(0), a22(0), a23(0),
+    a31(0), a32(0), a33(0),
+    det(0);
+
+Rows = ListC.Count(Matrix);
+Row1 = ListC.Get(Matrix, 1);
+Cols = ListN.Count(Row1);
+
+If Rows <> Cols then begin
+    print("ERROR: Matriz no es cuadrada");
+    Matrix_Determinant = 0;
+end
+else If Rows = 2 then begin
+    // Determinante 2o2: ad - bc
+    Row2 = ListC.Get(Matrix, 2);
+    a11 = ListN.Get(Row1, 1);
+    a12 = ListN.Get(Row1, 2);
+    a21 = ListN.Get(Row2, 1);
+    a22 = ListN.Get(Row2, 2);
+    
+    det = (a11 * a22) - (a12 * a21);
+    Matrix_Determinant = det;
+end
+else If Rows = 3 then begin
+    // Determinante 3o3: regla de Sarrus
+    Row2 = ListC.Get(Matrix, 2);
+    Row3 = ListC.Get(Matrix, 3);
+    
+    a11 = ListN.Get(Row1, 1);
+    a12 = ListN.Get(Row1, 2);
+    a13 = ListN.Get(Row1, 3);
+    a21 = ListN.Get(Row2, 1);
+    a22 = ListN.Get(Row2, 2);
+    a23 = ListN.Get(Row2, 3);
+    a31 = ListN.Get(Row3, 1);
+    a32 = ListN.Get(Row3, 2);
+    a33 = ListN.Get(Row3, 3);
+    
+    det = (a11*a22*a33 + a12*a23*a31 + a13*a21*a32) -
+          (a13*a22*a31 + a11*a23*a32 + a12*a21*a33);
+    
+    Matrix_Determinant = det;
+end
+else begin
+    print("ERROR: Solo soporta matrices 2o2 o 3o3");
+    Matrix_Determinant = 0;
+end;
+

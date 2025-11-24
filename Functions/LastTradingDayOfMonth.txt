@@ -1,0 +1,28 @@
+﻿Variables:
+	isLastDayOfMonth(False),
+	isSameMonth(False),
+	nextBusinessDay(0);
+
+// 'nextBusinessDay' is the next date in YYYMMdd EasyLanguage format
+if (DayOfWeek(Date) = Friday) then
+	nextBusinessDay = JulianToDate(DateToJulian(Date) + 3)
+else 
+	nextBusinessDay = JulianToDate(DateToJulian(Date) + 1);
+
+// 'isSameMonth' is true when the next business day is the same month as today
+isSameMonth = (Month(Date) = Month(nextBusinessDay));
+
+// 'isLastDayOfMonth' is true when the next business day is in a
+// different month, excluding the possibility of (bank) holidays
+if (not isSameMonth) then
+	isLastDayOfMonth = true 
+else 
+	isLastDayOfMonth = false;
+
+// Check with plotting
+
+if (isLastDayOfMonth = true) then
+	LastTradingDayOfMonth = True
+else 
+	LastTradingDayOfMonth = False;
+

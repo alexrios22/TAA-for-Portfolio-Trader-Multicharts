@@ -1,0 +1,24 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: BAA_CalculateMomentum
+// Calcula el momentum como return simple
+// Retorna: Valor de momentum en porcentaje
+////////////////////////////////////////////////
+
+Inputs:
+    CurrentClose(NumericSimple),
+    CloseNMonthAgo(NumericSimple);
+
+Vars:
+    retNm(0),
+    momentum(0);
+
+// Calcular return
+If CloseNMonthAgo > 0 then
+    retNm = (CurrentClose / CloseNMonthAgo - 1)
+else
+    retNm = 0;
+
+// Convertir a porcentaje
+momentum = 100 * retNm;
+
+BAA_CalculateMomentum = momentum;

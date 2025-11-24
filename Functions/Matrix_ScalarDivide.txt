@@ -1,0 +1,65 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: Matrix_ScalarDivide
+// Divide una matriz o vector por un escalar
+// Retorna: Nueva matriz/vector resultado
+////////////////////////////////////////////////
+
+Inputs:
+    Matrix(NumericSimple),      // ID de ListC (matriz) o ListN (vector)
+    Scalar(NumericSimple);      // Valor escalar (divisor)
+
+Vars:
+    Result(0),
+    Rows(0),
+    Cols(0),
+    idx(0),
+    jdx(0),
+    RowOrig(0),
+    RowResult(0),
+    Value(0),
+    collectionType("");
+
+// Verificar division por cero
+If Scalar = 0 then begin
+    print("ERROR: Division por cero en Matrix_ScalarDivide");
+    Matrix_ScalarDivide = 0;
+end
+else begin
+    // Detectar tipo de coleccion
+    collectionType = ELC.CollectionType(Matrix);
+    
+    If collectionType = "ListC" then begin
+        // Es una matriz (ListC)
+        Rows = ListC.Count(Matrix);
+        Result = ListC.New;
+        
+        For idx = 1 to Rows begin
+            RowOrig = ListC.Get(Matrix, idx);
+            RowResult = ListN.New;
+            Cols = ListN.Count(RowOrig);
+            
+            For jdx = 1 to Cols begin
+                Value = ListN.Get(RowOrig, jdx);
+                Value1 = ListN.PushBack(RowResult, Value / Scalar);
+            end;
+            
+            Value1 = ListC.PushBack(Result, RowResult);
+        end;
+    end
+    else If collectionType = "ListN" then begin
+        // Es un vector (ListN)
+        Cols = ListN.Count(Matrix);
+        Result = ListN.New;
+        
+        For idx = 1 to Cols begin
+            Value = ListN.Get(Matrix, idx);
+            Value1 = ListN.PushBack(Result, Value / Scalar);
+        end;
+    end
+    else begin
+        print("ERROR Matrix_ScalarDivide: Tipo de coleccion no soportado: ", collectionType);
+        Result = 0;
+    end;
+    
+    Matrix_ScalarDivide = Result;
+end;

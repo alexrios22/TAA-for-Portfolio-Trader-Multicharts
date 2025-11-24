@@ -1,0 +1,18 @@
+﻿////////////////////////////////////////////////
+// FUNCTION: FAA_CalculateVolatility
+// Calcula la volatilidad anualizada
+// Retorna: Valor de volatilidad anualizada
+////////////////////////////////////////////////
+
+inputs: 
+	PriceValue( numericseries ), 
+	Len( numericsimple );  
+Vars:
+    ret1m(0),
+    DataType( 1 ) ;
+
+
+ret1m = (PriceValue / PriceValue[1] - 1);
+
+// Calcular Volatilidad 
+FAA_CalculateVolatility = StandardDevAnnual( ret1m , Len, DataType ) ;
