@@ -37,14 +37,17 @@ Additional MultiCharts portfolio files are provided in the `Portfolio Trader Mul
 
 ### Primary Research
 - **TrendXplorer (Jan Willem Keuning)**: https://papers.ssrn.com/sol3/cf_dev/AbsByAuth.cfm?per_id=1935527
-- **Adaptive Asset Allocation: A Primer** (GestaltU & ReSolve Asset Management)
-- **Defensive Asset Allocation** (Guy Spier & others)
+- **Adaptive Asset Allocation: A Primer** (Adam Butler - GestaltU & ReSolve Asset Management)
+- **Defensive Asset Allocation** (Dr. Wouter Keller and JW Keuning)
 - **Global Equity Momentum** (Gary Antonacci)
-- **Flexible Asset Allocation** (Adam Butler, Mike Philbrick, Rodrigo Gordillo)
+- **Flexible Asset Allocation** (Dr. Wouter Keller and Hugo Van Putten)
+- **Elastic Asset Allocation** (Dr. Wouter Keller and Hugo Van Putten)
+- **Bold Asset Allocation** (Dr. Wouter Keller)
+- **Hybrid Asset Allocation** ( Dr. Wouter Keller and JW Keuning)
 
 ### Strategy-Specific References
 - **IBS (Internal Bar Strength)**: Oddmund Groette - https://www.quantifiedstrategies.com
-- **IA (Inercia Alcista)**: Javier Alfayate
+- **IA (Inercia Alcista)**: Javier Alfayate (https://www.amazon.com/-/es/Javier-Alfayate-Gallardo-ebook/dp/B089RJ3G2F)
 - **AAA**: GestaltU and ReSolve Asset Management - "Adaptive Asset Allocation: A Primer"
 
 ## Implementation Details
@@ -102,3 +105,4 @@ D. This code is Copyright, 2015, 2016, 2017, 2018 by the author. For non-commerc
 
 
 **Note to Users**: You are free to study and fork this code for personal/educational use. For any commercial usage or further redistribution outside of GitHub, please refer to the original author's terms above.
+
