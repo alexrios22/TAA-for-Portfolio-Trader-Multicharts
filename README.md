@@ -11,7 +11,7 @@ Tactical Asset Allocation strategies aim to improve risk-adjusted returns by rot
 ### Core Strategies
 
 - **AAA (Adaptive Asset Allocation)**: Tactical asset allocation strategy from the team at GestaltU and ReSolve Asset Management as described in the paper "Adaptive Asset Allocation: A Primer"
-- **BAA (Balanced Asset Allocation)**: Momentum-based strategy with protective canary universe
+- **BAA (Bold Asset Allocation)**: Momentum-based strategy with protective canary universe
 - **DAA (Defensive Asset Allocation)**: 3-universe strategy with Crash Protection Factor (CPF)
 - **EAA (Elastic Asset Allocation)**: 7 Golden Models with correlation-hedged scoring
 - **FAA (Flexible Asset Allocation)**: Momentum, volatility, and correlation-based ranking
@@ -99,5 +99,6 @@ B. Users are cautioned that the author may hold positions in securities referenc
 C. This code and the data and analysis contained herein is provided without any warranty, and no guarantees are offered as to the data contained herein, nor on any of the manipulations provided on that data, or the routines that are used to gather and manipulate the data.
 
 D. This code is Copyright, 2015, 2016, 2017, 2018 by the author. For non-commercial usage, users are given permission to use and modify the code as long as they properly attribute the original source to the author as well as include this disclaimer. Express written permission from the author is required before any re-distributions or commercial use of the code contained herein.
+
 
 **Note to Users**: You are free to study and fork this code for personal/educational use. For any commercial usage or further redistribution outside of GitHub, please refer to the original author's terms above.
